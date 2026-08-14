@@ -172,6 +172,7 @@ struct Global_map
     bool                                                         m_in_appending_pts = 0;
     int                                                          m_updated_frame_index = 0;
     std::shared_ptr< std::thread >                               m_thread_service;
+    std::atomic<bool>                                            m_stop_service{false};
     int                                                          m_if_reload_init_voxel_and_hashed_pts = true;
 
     Hash_map_3d< long, RGB_pt_ptr >   m_hashmap_3d_pts;

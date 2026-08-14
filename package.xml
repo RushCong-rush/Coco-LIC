@@ -59,6 +59,9 @@
   <build_depend>rosbag</build_depend>
   <exec_depend>rosbag</exec_depend>
 
+  <build_depend>livox_ros_driver</build_depend>
+  <exec_depend>livox_ros_driver</exec_depend>
+
   <build_depend>cv_bridge</build_depend>
   <exec_depend>cv_bridge</exec_depend>
 

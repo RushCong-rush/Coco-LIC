@@ -145,8 +145,8 @@ namespace cocolic
     std::string bag_name_ = path_bag.stem().string();
 
     std::string cache_path_parent_ = path_cfg.parent_path().string();
+    boost::filesystem::create_directories(cache_path_parent_ + "/data");
     cache_path_ = cache_path_parent_ + "/data/" + bag_name_;
-    // boost::filesystem::create_directory(cache_path_);
     return true;
   }
 

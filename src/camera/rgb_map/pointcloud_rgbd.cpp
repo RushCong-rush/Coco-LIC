@@ -195,14 +195,21 @@ Global_map::Global_map( int if_start_service )
         m_thread_service = std::make_shared< std::thread >( &Global_map::service_refresh_pts_for_projection, this );
     }
 }
-Global_map::~Global_map(){};
+Global_map::~Global_map()
+{
+    m_stop_service = true;
+    if (m_thread_service && m_thread_service->joinable())
+    {
+        m_thread_service->join();
+    }
+}
 
 void Global_map::service_refresh_pts_for_projection()
 {
     eigen_q last_pose_q = eigen_q::Identity();
     Common_tools::Timer                timer;
     std::shared_ptr< Image_frame > img_for_projection = std::make_shared< Image_frame >();
-    while (1)
+    while (!m_stop_service)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         m_mutex_img_pose_for_projection->lock();

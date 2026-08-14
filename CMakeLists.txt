@@ -27,6 +27,7 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   message_generation
   image_transport
+  livox_ros_driver
 )
 
 # FIND_PACKAGE(Boost REQUIRED COMPONENTS thread)
@@ -40,7 +41,9 @@ find_package(Eigen3 REQUIRED)
 find_package(Ceres REQUIRED)
 # find_package(Sophus REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(PCL 1.13.0 REQUIRED)
+# ROS Noetic on Ubuntu 20.04 ships PCL 1.10. Coco-LIC only uses APIs
+# available in that release.
+find_package(PCL 1.10 REQUIRED)
 
 # find_package(yaml-cpp REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -94,6 +97,7 @@ list(APPEND thirdparty_libraries
 )
 
 add_library(spline_lib src/spline/trajectory.cpp)
+add_dependencies(spline_lib ${catkin_EXPORTED_TARGETS})
 target_link_libraries(spline_lib ${thirdparty_libraries})
 
 file(GLOB lidar_odometry_files
@@ -102,6 +106,7 @@ file(GLOB lidar_odometry_files
     "src/lidar/livox_feature_extraction.cpp"
 )
 add_library(lidar_lib ${lidar_odometry_files})
+add_dependencies(lidar_lib ${catkin_EXPORTED_TARGETS})
 target_link_libraries(lidar_lib spline_lib ${thirdparty_libraries})
 
 file(GLOB r3live_files
@@ -111,6 +116,7 @@ file(GLOB r3live_files
     "src/camera/*.cpp"
 )
 add_library(r3live_lib ${r3live_files})
+add_dependencies(r3live_lib ${catkin_EXPORTED_TARGETS})
 target_link_libraries(r3live_lib ${thirdparty_libraries})
 
 add_executable(odometry_node 
@@ -124,6 +130,7 @@ add_executable(odometry_node
    src/odom/factor/analytic_diff/marginalization_factor.cpp
    src/utils/parameter_struct.cpp
 )
+add_dependencies(odometry_node ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
 
 target_link_libraries(odometry_node 
    spline_lib 
