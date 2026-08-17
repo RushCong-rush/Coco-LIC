@@ -271,6 +271,7 @@ void Global_map::update_pose_for_projection(std::shared_ptr<Image_frame> &img, d
 {
     m_mutex_img_pose_for_projection->lock();
     m_img_for_projection.set_intrinsic(img->m_cam_K);
+    m_img_for_projection.set_camera_geometry(img->m_camera_geometry);
     m_img_for_projection.m_img_cols = img->m_img_cols;
     m_img_for_projection.m_img_rows = img->m_img_rows;
     m_img_for_projection.m_fov_margin = fov_margin;
@@ -279,6 +280,7 @@ void Global_map::update_pose_for_projection(std::shared_ptr<Image_frame> &img, d
     m_img_for_projection.m_pose_w2c_t = img->m_pose_w2c_t;
     m_img_for_projection.m_img_gray = img->m_img_gray; // clone?
     m_img_for_projection.m_img = img->m_img;           // clone?
+    m_img_for_projection.m_valid_mask = img->m_valid_mask;
     m_img_for_projection.refresh_pose_for_projection();
     m_mutex_img_pose_for_projection->unlock();
 }

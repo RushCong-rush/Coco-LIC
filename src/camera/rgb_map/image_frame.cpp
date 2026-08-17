@@ -99,6 +99,12 @@ void Image_frame::set_intrinsic(Eigen::Matrix3d &camera_K)
     m_gama_para(1) = 0.0;
 }
 
+void Image_frame::set_camera_geometry(
+    const std::shared_ptr<cocolic::CameraGeometry> &camera_geometry)
+{
+    m_camera_geometry = camera_geometry;
+}
+
 Image_frame::Image_frame(Eigen::Matrix3d &camera_K)
 {
     m_pose_w2c_q.setIdentity();
@@ -150,6 +156,17 @@ bool Image_frame::project_3d_to_2d(const pcl::PointXYZI & in_pt, Eigen::Matrix3d
     vec_3 pt_w(in_pt.x, in_pt.y, in_pt.z), pt_cam;
     // pt_cam = (m_pose_w2c_q.inverse() * pt_w - m_pose_w2c_q.inverse()*m_pose_w2c_t);
     pt_cam = (m_pose_c2w_q * pt_w + m_pose_c2w_t);
+    if (m_camera_geometry)
+    {
+        Eigen::Vector2d pixel;
+        if (!m_camera_geometry->project(pt_cam, pixel))
+        {
+            return false;
+        }
+        u = pixel.x() * scale;
+        v = pixel.y() * scale;
+        return true;
+    }
     if (pt_cam(2) < 0.001)
     {
         return false;
@@ -167,9 +184,30 @@ bool Image_frame::if_2d_points_available(const double &u, const double &v, const
         used_fov_margin = fov_mar;
     }
 
-    if ((u / scale >= (used_fov_margin * m_img_cols + 1)) && (std::ceil(u / scale) < ((1 - used_fov_margin) * m_img_cols)) &&
-        (v / scale >= (used_fov_margin * m_img_rows + 1)) && (std::ceil(v / scale) < ((1 - used_fov_margin) * m_img_rows)))
+    double pixel_u = u / scale;
+    const double pixel_v = v / scale;
+    const bool erp = m_camera_geometry && m_camera_geometry->isEquirectangular();
+    if (erp)
     {
+        pixel_u = m_camera_geometry->wrapPixelU(pixel_u);
+    }
+    const bool horizontal_valid = erp ||
+        ((pixel_u >= used_fov_margin * m_img_cols + 1) &&
+         (std::ceil(pixel_u) < (1 - used_fov_margin) * m_img_cols));
+    const bool vertical_valid =
+        (pixel_v >= used_fov_margin * m_img_rows + 1) &&
+        (std::ceil(pixel_v) < (1 - used_fov_margin) * m_img_rows);
+    if (horizontal_valid && vertical_valid)
+    {
+        if (!m_valid_mask.empty())
+        {
+            const int mask_u = std::min(m_img_cols - 1, std::max(0, static_cast<int>(std::round(pixel_u))));
+            const int mask_v = std::min(m_img_rows - 1, std::max(0, static_cast<int>(std::round(pixel_v))));
+            if (m_valid_mask.at<uchar>(mask_v, mask_u) == 0)
+            {
+                return false;
+            }
+        }
         return true;
     }
     else
@@ -179,7 +217,8 @@ bool Image_frame::if_2d_points_available(const double &u, const double &v, const
 }
 
 template<typename T>
-inline T getSubPixel(cv::Mat & mat, const double & row, const  double & col, double pyramid_layer = 0)
+inline T getSubPixel(cv::Mat & mat, const double & row, const double & col,
+                     double pyramid_layer = 0, bool wrap_horizontal = false)
 {
 	int floor_row = floor(row);
 	int floor_col = floor(col);
@@ -195,24 +234,34 @@ inline T getSubPixel(cv::Mat & mat, const double & row, const  double & col, dou
         ceil_row += pos_bias;
         ceil_row += pos_bias;
     }
+    if (wrap_horizontal)
+    {
+        floor_col = (floor_col % mat.cols + mat.cols) % mat.cols;
+        ceil_col = (ceil_col % mat.cols + mat.cols) % mat.cols;
+    }
     return ((1.0 - frac_row) * (1.0 - frac_col) * (T)mat.ptr<T>(floor_row)[floor_col]) +
-               (frac_row * (1.0 - frac_col) * (T)mat.ptr<T>(ceil_row)[floor_col]) +
-               ((1.0 - frac_row) * frac_col * (T)mat.ptr<T>(floor_row)[ceil_col]) +
-               (frac_row * frac_col * (T)mat.ptr<T>(ceil_row)[ceil_col]);
+           (frac_row * (1.0 - frac_col) * (T)mat.ptr<T>(ceil_row)[floor_col]) +
+           ((1.0 - frac_row) * frac_col * (T)mat.ptr<T>(floor_row)[ceil_col]) +
+           (frac_row * frac_col * (T)mat.ptr<T>(ceil_row)[ceil_col]);
 }
 
 vec_3 Image_frame::get_rgb( double &u, double v, int layer, vec_3 *rgb_dx, vec_3 *rgb_dy )
 {
     const int ssd = 5;
-    cv::Vec3b rgb = getSubPixel< cv::Vec3b >( m_img, v, u, layer );
+    const bool wrap_horizontal = m_camera_geometry && m_camera_geometry->isEquirectangular();
+    if (wrap_horizontal)
+    {
+        u = m_camera_geometry->wrapPixelU(u);
+    }
+    cv::Vec3b rgb = getSubPixel< cv::Vec3b >( m_img, v, u, layer, wrap_horizontal );
     if ( rgb_dx != nullptr )
     {
         cv::Vec3f rgb_left( 0, 0, 0 ), rgb_right( 0, 0, 0 );
         float     pixel_dif = 0;
         for ( int bias_idx = 1; bias_idx < ssd; bias_idx++ )
         {
-            rgb_left += getSubPixel< cv::Vec3b >( m_img, v, u - bias_idx, layer );
-            rgb_right += getSubPixel< cv::Vec3b >( m_img, v, u + bias_idx, layer );
+            rgb_left += getSubPixel< cv::Vec3b >( m_img, v, u - bias_idx, layer, wrap_horizontal );
+            rgb_right += getSubPixel< cv::Vec3b >( m_img, v, u + bias_idx, layer, wrap_horizontal );
             pixel_dif += 2 * bias_idx;
         }
         cv::Vec3f cv_rgb_dx = rgb_right - rgb_left;
@@ -224,8 +273,8 @@ vec_3 Image_frame::get_rgb( double &u, double v, int layer, vec_3 *rgb_dx, vec_3
         float     pixel_dif = 0;
         for ( int bias_idx = 1; bias_idx < ssd; bias_idx++ )
         {
-            rgb_down += getSubPixel< cv::Vec3b >( m_img, v - bias_idx, u, layer );
-            rgb_up += getSubPixel< cv::Vec3b >( m_img, v + bias_idx, u, layer );
+            rgb_down += getSubPixel< cv::Vec3b >( m_img, v - bias_idx, u, layer, wrap_horizontal );
+            rgb_up += getSubPixel< cv::Vec3b >( m_img, v + bias_idx, u, layer, wrap_horizontal );
             pixel_dif += 2 * bias_idx;
         }
         cv::Vec3f cv_rgb_dy = rgb_up - rgb_down;
@@ -258,9 +307,12 @@ double Image_frame::get_grey_color( double &u, double &v, int layer )
 
 bool Image_frame::get_rgb(const double &u, const double &v, int &r, int &g, int &b)
 {
-    r = m_img.at<cv::Vec3b>(v, u)[2];
-    g = m_img.at<cv::Vec3b>(v, u)[1];
-    b = m_img.at<cv::Vec3b>(v, u)[0];
+    const int sample_u = m_camera_geometry && m_camera_geometry->isEquirectangular()
+                             ? static_cast<int>(m_camera_geometry->wrapPixelU(u))
+                             : static_cast<int>(u);
+    r = m_img.at<cv::Vec3b>(v, sample_u)[2];
+    g = m_img.at<cv::Vec3b>(v, sample_u)[1];
+    b = m_img.at<cv::Vec3b>(v, sample_u)[0];
     return true;
 }
 

@@ -106,6 +106,7 @@ Dr. Fu Zhang < fuzhang@hku.hk >.
 #include <utils/log_utils.h>
 #include <utils/yaml_utils.h>
 #include <utils/parameter_struct.h>
+#include <camera/camera_geometry.h>
 
 #define INIT_TIME (0)
 // #define LASER_POINT_COV (0.0015) // Ori
@@ -275,6 +276,8 @@ public:
     double m_tracker_maximum_depth = 200;
     int m_if_record_mvs = 0;
     cv::Mat intrinsic, dist_coeffs;
+    std::shared_ptr<cocolic::CameraGeometry> m_camera_geometry;
+    cv::Mat m_valid_mask;
 
     mat_3_3 m_inital_rot_ext_i2c;
     vec_3  m_inital_pos_ext_i2c;
@@ -440,6 +443,26 @@ public:
             double cam_d3 = node["cam_d3"].as<double>();
             double cam_d4 = node["cam_d4"].as<double>();
             m_camera_dist_coeffs << cam_d0, cam_d1, cam_d2, cam_d3, cam_d4;
+            const std::string camera_model =
+                node["camera_model"] ? node["camera_model"].as<std::string>() : "pinhole";
+            m_camera_geometry = std::make_shared<cocolic::CameraGeometry>(
+                cocolic::CameraModelFromString(camera_model),
+                static_cast<int>(m_vio_image_width), static_cast<int>(m_vio_image_heigh),
+                Eigen::Matrix3d(m_camera_intrinsic));
+            if (node["valid_mask_path"])
+            {
+                m_valid_mask = cv::imread(node["valid_mask_path"].as<std::string>(), cv::IMREAD_GRAYSCALE);
+                if (m_valid_mask.empty())
+                {
+                    throw std::runtime_error("Cannot load camera valid mask");
+                }
+                if (m_valid_mask.cols != m_vio_image_width || m_valid_mask.rows != m_vio_image_heigh)
+                {
+                    cv::resize(m_valid_mask, m_valid_mask,
+                               cv::Size(m_vio_image_width, m_vio_image_heigh), 0, 0,
+                               cv::INTER_NEAREST);
+                }
+            }
             m_camera_ext_R << EP_CtoI.q.toRotationMatrix();
             m_camera_ext_t << EP_CtoI.p;
         }

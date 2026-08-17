@@ -205,6 +205,10 @@ namespace cocolic
     void SetProcessCurImg(bool flag) { process_cur_img_ = flag; }
 
     void SetIntrinsic(const Eigen::Matrix3d& K) { K_ = K; }
+    void SetCameraGeometry(const std::shared_ptr<CameraGeometry> &camera_geometry)
+    {
+      camera_geometry_ = camera_geometry;
+    }
 
   private:
     bool LocatedInFirstSegment(double cur_t) const
@@ -281,6 +285,7 @@ namespace cocolic
     Eigen::aligned_vector<Eigen::Vector2d> px_obss_;
 
     Eigen::Matrix3d K_;
+    std::shared_ptr<CameraGeometry> camera_geometry_;
 
   public:
     void ClearVisual()

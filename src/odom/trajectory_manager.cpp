@@ -444,7 +444,7 @@ namespace cocolic
             img_time_stamp,
             trajectory_->GetSensorEP(CameraSensor).so3,
             trajectory_->GetSensorEP(CameraSensor).p,
-            K_, opt_weight_.image_weight);
+            *camera_geometry_, opt_weight_.image_weight);
       }
     }
     else
@@ -692,7 +692,7 @@ namespace cocolic
               v_points_[i], px_obss_[i],
               trajectory_->GetSensorEP(CameraSensor).so3,
               trajectory_->GetSensorEP(CameraSensor).p,
-              K_, opt_weight_.image_weight);
+              *camera_geometry_, opt_weight_.image_weight);
           ceres::LossFunction *loss_function = NULL;
           loss_function = new ceres::CauchyLoss(10.0); // adopted from vins-mono
           ResidualBlockInfo *residual_block_info = new ResidualBlockInfo(RType_Image, cost_function, loss_function,

@@ -418,11 +418,20 @@ void   R3LIVE::process_image( cv::Mat &temp_img, double msg_time )
         img_get = temp_img; // clone ?
     }
     std::shared_ptr< Image_frame > img_pose = std::make_shared< Image_frame >( g_cam_K );
+    img_pose->set_camera_geometry(m_camera_geometry);
+    img_pose->m_valid_mask = m_valid_mask;
     if ( m_if_pub_raw_img )
     {
         img_pose->m_raw_img = img_get;
     }
-    cv::remap( img_get, img_pose->m_img, m_ud_map1, m_ud_map2, cv::INTER_LINEAR );
+    if (m_camera_geometry->isEquirectangular())
+    {
+        img_pose->m_img = img_get;
+    }
+    else
+    {
+        cv::remap( img_get, img_pose->m_img, m_ud_map1, m_ud_map2, cv::INTER_LINEAR );
+    }
     // cv::imshow("sub Img", img_pose->m_img);
     img_pose->m_timestamp = msg_time;
     img_pose->init_cubic_interpolation();
@@ -1316,8 +1325,11 @@ void R3LIVE::UpdateVisualSubMap(const cv::Mat& img_in, double img_time, const Ei
         g_cam_dist = Eigen::Map< Eigen::Matrix< double, 5, 1 > >( camera_dist_data );
         cv::eigen2cv( g_cam_K, intrinsic );
         cv::eigen2cv( g_cam_dist, dist_coeffs );
-        cv::initUndistortRectifyMap( intrinsic, dist_coeffs, cv::Mat(), intrinsic, cv::Size(m_vio_image_width, m_vio_image_heigh),
-                                 CV_16SC2, m_ud_map1, m_ud_map2 );  //
+        if (!m_camera_geometry->isEquirectangular())
+        {
+            cv::initUndistortRectifyMap( intrinsic, dist_coeffs, cv::Mat(), intrinsic, cv::Size(m_vio_image_width, m_vio_image_heigh),
+                                     CV_16SC2, m_ud_map1, m_ud_map2 );  //
+        }
 
         op_track.set_intrinsic( g_cam_K, g_cam_dist * 0, cv::Size( m_vio_image_width, m_vio_image_heigh) );
         op_track.m_maximum_vio_tracked_pts = m_maximum_vio_tracked_pts;         
@@ -1332,12 +1344,21 @@ void R3LIVE::UpdateVisualSubMap(const cv::Mat& img_in, double img_time, const Ei
         // std::getchar();
     }
     img_pose_ = std::make_shared< Image_frame >(g_cam_K);
+    img_pose_->set_camera_geometry(m_camera_geometry);
+    img_pose_->m_valid_mask = m_valid_mask;
     cv::Mat img_in_clone = img_in.clone();
     // img_pose_->set_intrinsic(g_cam_K);
     img_pose_->m_timestamp = img_time;
     img_pose_->m_raw_img = img_in_clone;  //
     // img_pose_->m_img = img_in_clone;
-    cv::remap( img_in_clone, img_pose_->m_img, m_ud_map1, m_ud_map2, cv::INTER_LINEAR );  //
+    if (m_camera_geometry->isEquirectangular())
+    {
+        img_pose_->m_img = img_in_clone;
+    }
+    else
+    {
+        cv::remap( img_in_clone, img_pose_->m_img, m_ud_map1, m_ud_map2, cv::INTER_LINEAR );  //
+    }
     img_pose_->init_cubic_interpolation();      //
     img_pose_->image_equalize();                        //
     img_pose_->set_pose(q_wc, t_wc);  //Twc
@@ -1371,12 +1392,15 @@ void R3LIVE::UpdateVisualSubMap(const cv::Mat& img_in, double img_time, const Ei
     frame_idx_++;
 
     // [4]
-    op_track.track_img( img_pose_, -20 );
+    op_track.track_img(img_pose_, m_camera_geometry->isEquirectangular() ? 8.0 : -20);
     // LOG(INFO) << "[inlier after fmat] " << op_track.m_current_tracked_pts.size();
     op_track.inlier_aft_fmat = op_track.m_last_tracked_pts.size();
 
     // [5]
-    op_track.remove_outlier_using_ransac_pnp( img_pose_, 1 );
+    if (!m_camera_geometry->isEquirectangular())
+    {
+        op_track.remove_outlier_using_ransac_pnp( img_pose_, 1 );
+    }
     // LOG(INFO) << "[inlier after pnp] " << op_track.m_current_tracked_pts.size();
     op_track.inlier_aft_pnp = op_track.m_last_tracked_pts.size();
 

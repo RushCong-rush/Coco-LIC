@@ -26,6 +26,7 @@
 #include <opencv2/highgui/highgui.hpp>
 
 #include <odom/factor/analytic_diff/split_spline_view.h>
+#include <camera/camera_geometry.h>
 
 namespace cocolic
 {
@@ -50,7 +51,8 @@ namespace cocolic
           const int64_t t_img, const std::pair<int, double> &su,
           const Eigen::Matrix4d &blending_matrix, const Eigen::Matrix4d &cumulative_blending_matrix,
           const Eigen::Vector3d &v_point, const Eigen::Vector2d &px_obs,
-          const SO3d &S_VtoI, const Eigen::Vector3d &p_VinI, const Eigen::Matrix3d &K,
+          const SO3d &S_VtoI, const Eigen::Vector3d &p_VinI,
+          const CameraGeometry &camera_geometry,
           double img_weight)
           : t_img_(t_img),
             su_(su),
@@ -58,7 +60,7 @@ namespace cocolic
             cumulative_blending_matrix_(cumulative_blending_matrix),
             v_point_(v_point), // 
             px_obs_(px_obs),
-            S_VtoI_(S_VtoI), p_VinI_(p_VinI), K_(K),
+            S_VtoI_(S_VtoI), p_VinI_(p_VinI), camera_geometry_(camera_geometry),
             img_weight_(img_weight)
       {
         /// 
@@ -105,15 +107,13 @@ namespace cocolic
         SE3d Twc = Twb * Tbc;
         Vec3d p_C = Twc.inverse() * v_point_; 
 
-        double fx = K_(0, 0);
-        double cx = K_(0, 2);
-        double fy = K_(1, 1);
-        double cy = K_(1, 2);
         Vec2d uv;
-        uv << fx * p_C.x() / p_C.z() + cx, fy * p_C.y() / p_C.z() + cy;
+        if (!camera_geometry_.project(p_C, uv))
+          return false;
 
-        residuals[0] = (px_obs_.x() - uv.x()) * img_weight_;
-        residuals[1] = (px_obs_.y() - uv.y()) * img_weight_;
+        const Vec2d pixel_residual = camera_geometry_.pixelDifference(px_obs_, uv);
+        residuals[0] = pixel_residual.x() * img_weight_;
+        residuals[1] = pixel_residual.y() * img_weight_;
 
         if (!jacobians)
         {
@@ -141,11 +141,9 @@ namespace cocolic
 
         // 2x3
         Eigen::Matrix<double, 2, 3> d_uv_d_pC;
-        double X = p_C.x(), Y = p_C.y(), Z = p_C.z();
-        // d_uv_d_pC << fx / Z, 0, -fx * X / (Z * Z),
-        //     0, fy / Z, -fy * Y / (Z * Z);
-        d_uv_d_pC << - fx / Z, 0, fx * X / (Z * Z),
-            0, - fy / Z, fy * Y / (Z * Z);
+        if (!camera_geometry_.projectJacobian(p_C, d_uv_d_pC))
+          return false;
+        d_uv_d_pC = -d_uv_d_pC;
 
         //
         Eigen::Matrix3d d_pC_d_twb = -S_VtoI_.inverse().matrix() * S_ItoG.inverse().matrix();
@@ -190,7 +188,7 @@ namespace cocolic
       Eigen::Vector2d px_obs_;
       SO3d S_VtoI_;
       Eigen::Vector3d p_VinI_;
-      Eigen::Matrix3d K_;
+      CameraGeometry camera_geometry_;
       double img_weight_;
     };
 

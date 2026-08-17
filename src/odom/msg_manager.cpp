@@ -58,6 +58,8 @@ namespace cocolic
     std::string cam_yaml = node["camera_yaml"].as<std::string>();
     YAML::Node cam_node = YAML::LoadFile(config_path + cam_yaml);
     img_time_offset_ = cam_node["img_time_offset"].as<double>();
+    image_width_ = cam_node["image_width"].as<int>();
+    image_height_ = cam_node["image_height"].as<int>();
 
     // add_extra_timeoffset_s_ =
     //     yaml::GetValue<double>(node, "add_extra_timeoffset_s", 0);
@@ -686,9 +688,11 @@ namespace cocolic
     image_buf_.back().image = cvImgPtr->image;
     nerf_time_.push_back(image_buf_.back().timestamp);
 
-    if (image_buf_.back().image.cols == 640 || image_buf_.back().image.cols == 1280)
+    if (image_buf_.back().image.cols != image_width_ ||
+        image_buf_.back().image.rows != image_height_)
     {
-      cv::resize(image_buf_.back().image, image_buf_.back().image, cv::Size(640, 512), 0, 0, cv::INTER_LINEAR);
+      cv::resize(image_buf_.back().image, image_buf_.back().image,
+                 cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
     }
 
     // // for tiers
@@ -723,9 +727,11 @@ namespace cocolic
 
     // std::cout << image_buf_.back().image.rows << " " << image_buf_.back().image.cols << std::endl;
 
-    if (image_buf_.back().image.cols == 640 || image_buf_.back().image.cols == 1280)
+    if (image_buf_.back().image.cols != image_width_ ||
+        image_buf_.back().image.rows != image_height_)
     {
-      cv::resize(image_buf_.back().image, image_buf_.back().image, cv::Size(640, 512), 0, 0, cv::INTER_LINEAR);
+      cv::resize(image_buf_.back().image, image_buf_.back().image,
+                 cv::Size(image_width_, image_height_), 0, 0, cv::INTER_LINEAR);
     }
 
     // // for mars

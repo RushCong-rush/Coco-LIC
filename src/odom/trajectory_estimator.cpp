@@ -250,7 +250,8 @@ namespace cocolic
   void TrajectoryEstimator::AddPnPMeasurementAnalyticNURBS(const Eigen::Vector3d &visual_map_point,
                                                            const Eigen::Vector2d &pixel_obs,
                                                            int64_t cur_img_timestamp,
-                                                           const SO3d &S_VtoI, const Eigen::Vector3d &p_VinI, const Eigen::Matrix3d &K,
+                                                           const SO3d &S_VtoI, const Eigen::Vector3d &p_VinI,
+                                                           const CameraGeometry &camera_geometry,
                                                            double img_weight)
   {
     int64_t time_ns = cur_img_timestamp;
@@ -265,7 +266,7 @@ namespace cocolic
         new Functor(time_ns, su,
                     blending_matrix, cumulative_blending_matrix,
                     visual_map_point, pixel_obs,
-                    S_VtoI, p_VinI, K, img_weight);
+                    S_VtoI, p_VinI, camera_geometry, img_weight);
 
     std::vector<double *> vec;
     AddControlPointsNURBS(su.first - 3, vec);

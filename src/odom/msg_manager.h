@@ -320,6 +320,8 @@ namespace cocolic
     bool remove_wrong_time_imu_;
     bool if_normalized_;
     double img_time_offset_;
+    int image_width_;
+    int image_height_;
 
     std::string imu_topic_;
     int num_lidars_;

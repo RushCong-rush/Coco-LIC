@@ -139,3 +139,12 @@ target_link_libraries(odometry_node
    ${thirdparty_libraries}
   #  fmt::fmt
 )
+
+if(CATKIN_ENABLE_TESTING)
+  add_executable(camera_geometry_test tests/test_camera_geometry.cpp)
+  target_link_libraries(camera_geometry_test ${catkin_LIBRARIES})
+  add_test(NAME camera_geometry_test COMMAND camera_geometry_test)
+  add_executable(erp_visual_residual_test tests/test_erp_visual_residual.cpp)
+  target_link_libraries(erp_visual_residual_test ${catkin_LIBRARIES})
+  add_test(NAME erp_visual_residual_test COMMAND erp_visual_residual_test)
+endif()

@@ -92,6 +92,8 @@ namespace cocolic
     // camera
     camera_handler_ = std::make_shared<R3LIVE>(cam_node, EP_CtoI);
     t_begin_add_cam_ = node["t_begin_add_cam"].as<double>() * S_TO_NS;
+    enable_visual_constraints_ =
+        node["enable_visual_constraints"] ? node["enable_visual_constraints"].as<bool>() : true;
     v_points_.clear();
     px_obss_.clear();
     double fx = cam_node["cam_fx"].as<double>();
@@ -101,11 +103,17 @@ namespace cocolic
     K_ << fx, 0.0, cx,
         0.0, fy, cy,
         0.0, 0.0, 1.0;
+    const std::string camera_model =
+        cam_node["camera_model"] ? cam_node["camera_model"].as<std::string>() : "pinhole";
+    camera_geometry_ = std::make_shared<CameraGeometry>(
+        CameraModelFromString(camera_model), cam_node["image_width"].as<int>(),
+        cam_node["image_height"].as<int>(), K_);
 
     // trajectory parameterized by b-spline
     trajectory_manager_ = std::make_shared<TrajectoryManager>(node, config_path, trajectory_);
     trajectory_manager_->use_lidar_scale = use_lidar_scale_;
     trajectory_manager_->SetIntrinsic(K_);
+    trajectory_manager_->SetCameraGeometry(camera_geometry_);
 
     int division_coarse = node["division_coarse"].as<int>();
     cp_add_num_coarse_ = division_coarse;
@@ -271,7 +279,8 @@ namespace cocolic
     auto &msg = msg_manager_->cur_msgs;  // fake points with timestamp -1 exist up to now
     msg.CheckData();
 
-    bool process_image = msg.if_have_image && msg.image_timestamp > t_begin_add_cam_;
+    const bool has_image = msg.if_have_image && msg.image_timestamp > t_begin_add_cam_;
+    const bool process_image = has_image && enable_visual_constraints_;
     if (process_image)
     {
       // LOG(INFO) << "Process " << msg.scan_num << " scans in ["
@@ -421,7 +430,7 @@ namespace cocolic
     }
 
     /// [new] for Gaussian-LIC
-    if (process_image && if_3dgs_)
+    if (has_image && if_3dgs_)
     {
       Publish3DGSMappingData(msg);
     }
@@ -740,9 +749,9 @@ namespace cocolic
   {
     time_buf.push(msg.image_timestamp);
     lidar_buf.push(lidar_handler_->GetFeatureCurrent());
-    img_buf.push(camera_handler_->img_pose_->m_img);
+    img_buf.push(msg.image);
 
-    while(1)
+    while(!time_buf.empty())
     {
       int64_t active_time = trajectory_->GetActiveTime();
       if (time_buf.front() < active_time && lidar_buf.front().time_max < active_time)
@@ -768,11 +777,8 @@ namespace cocolic
 
         auto pose_cam = trajectory_->GetCameraPoseNURBS(time);
         auto inv_pose_cam = pose_cam.inverse();
-        auto cam_K = camera_handler_->m_camera_intrinsic;
-        double fx = cam_K(0, 0), fy = cam_K(1, 1);
-        double cx = cam_K(0, 2), cy = cam_K(1, 2);
-        int H = camera_handler_->img_pose_->m_img.rows;
-        int W = camera_handler_->img_pose_->m_img.cols;
+        int H = img.rows;
+        int W = img.cols;
 
         // depth
         cv::Mat depthmap = cv::Mat::zeros(H, W, CV_32FC1);
@@ -784,12 +790,13 @@ namespace cocolic
             auto pt = lidarpoint->points[i];
             Eigen::Vector3d pt_w = Eigen::Vector3d(pt.x, pt.y, pt.z);
             Eigen::Vector3d pt_c = inv_pose_cam.unit_quaternion().toRotationMatrix() * pt_w + inv_pose_cam.translation();
-            double depth = pt_c(2);
-            pt_c /= pt_c(2);
-            double u = fx * pt_c(0) + cx;
-            double v = fy * pt_c(1) + cy;
+            Eigen::Vector2d pixel;
+            double depth = 0.0;
+            if (!camera_geometry_->project(pt_c, pixel, &depth)) continue;
+            double u = pixel.x();
+            double v = pixel.y();
             int i_u = std::round(u), i_v = std::round(v);
-            if (depth <= 0) continue;
+            if (i_u == W && camera_geometry_->isEquirectangular()) i_u = 0;
             if (!((i_u >= 0 && i_u < W && i_v >= 0 && i_v < H))) continue;
 
             float& current_depth = depthmap.at<float>(i_v, i_u);
@@ -804,6 +811,24 @@ namespace cocolic
           lidarpoints.erase(lidarpoints.begin());
         }
         odom_viewer_.Publish3DGSDepth(depthmap, time + trajectory_->GetDataStartTime());
+        if (odom_viewer_.pub_undistort_scan_in_cur_img_.getNumSubscribers() != 0)
+        {
+          cv::Mat overlay = img.clone();
+          cv::Mat color_depth = colormap_depth_img(depthmap);
+          for (int row = 0; row < H; ++row)
+          {
+            for (int col = 0; col < W; ++col)
+            {
+              if (depthmap.at<float>(row, col) > 0.0f)
+                overlay.at<cv::Vec3b>(row, col) = color_depth.at<cv::Vec3b>(row, col);
+            }
+          }
+          cv_bridge::CvImage output;
+          output.header.stamp.fromNSec(time + trajectory_->GetDataStartTime());
+          output.encoding = sensor_msgs::image_encodings::BGR8;
+          output.image = overlay;
+          odom_viewer_.PublishUndistortScanInCurImg(output.toImageMsg());
+        }
 
         // pose
         odom_viewer_.Publish3DGSPose(pose_cam.unit_quaternion(), pose_cam.translation(), time + trajectory_->GetDataStartTime());
@@ -818,15 +843,15 @@ namespace cocolic
           auto pt = cloud_undistort_ds->points[i];
           Eigen::Vector3d pt_w = Eigen::Vector3d(pt.x, pt.y, pt.z);
           Eigen::Vector3d pt_c = inv_pose_cam.unit_quaternion().toRotationMatrix() * pt_w + inv_pose_cam.translation();
-          if (pt_c(2) < 0.01) 
+          Eigen::Vector2d pixel;
+          if (!camera_geometry_->project(pt_c, pixel))
           {
             filter_cnt++;
             continue;
           }
-          pt_c /= pt_c(2);
-          double u = fx * pt_c(0) + cx;
-          double v = fy * pt_c(1) + cy;
-          if (u < 0 || u > W - 1) 
+          double u = pixel.x();
+          double v = pixel.y();
+          if (v < 0 || v > H - 1)
           {
             filter_cnt++;
             continue;
@@ -838,13 +863,14 @@ namespace cocolic
           if (i_u >= 0 && i_u < W && i_v >= 0 && i_v < H)
           {
             int u0 = std::floor(u), v0 = std::floor(v);
-            int u1 = std::min(u0 + 1, W - 1), v1 = std::min(v0 + 1, H - 1);
+            int u1 = camera_geometry_->isEquirectangular() ? (u0 + 1) % W : std::min(u0 + 1, W - 1);
+            int v1 = std::min(v0 + 1, H - 1);
             double du = u - u0, dv = v - v0;
 
-            cv::Vec3b c00 = camera_handler_->img_pose_->m_img.at<cv::Vec3b>(v0, u0);
-            cv::Vec3b c10 = camera_handler_->img_pose_->m_img.at<cv::Vec3b>(v0, u1);
-            cv::Vec3b c01 = camera_handler_->img_pose_->m_img.at<cv::Vec3b>(v1, u0);
-            cv::Vec3b c11 = camera_handler_->img_pose_->m_img.at<cv::Vec3b>(v1, u1);
+            cv::Vec3b c00 = img.at<cv::Vec3b>(v0, u0);
+            cv::Vec3b c10 = img.at<cv::Vec3b>(v0, u1);
+            cv::Vec3b c01 = img.at<cv::Vec3b>(v1, u0);
+            cv::Vec3b c11 = img.at<cv::Vec3b>(v1, u1);
 
             Eigen::Vector3d color00(c00[0], c00[1], c00[2]);
             Eigen::Vector3d color10(c10[0], c10[1], c10[2]);

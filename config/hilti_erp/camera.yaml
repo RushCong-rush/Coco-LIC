@@ -1,0 +1,27 @@
+%YAML:1.0
+
+camera_model: equirectangular
+image_topic: /odgs/panorama
+image_width: 1024
+image_height: 512
+valid_mask_path: /datasets/hilti_oxford_2022/exp14_basement_2/panorama_coincident_aware/coverage_mask.png
+
+# Legacy R3LIVE members still require a matrix; ERP projection ignores it.
+cam_fx: 1.0
+cam_fy: 1.0
+cam_cx: 512.0
+cam_cy: 256.0
+cam_d0: 0.0
+cam_d1: 0.0
+cam_d2: 0.0
+cam_d3: 0.0
+cam_d4: 0.0
+
+# Virtual ERP camera to IMU. The stitched panorama uses cam0 as its reference.
+CameraExtrinsics:
+    Trans: [0.051263549682, 0.045390122012, -0.013214912699]
+    Rot: [0.006708021452, 0.002425643642, 0.999974559027,
+          0.999926420062, 0.010091197022, -0.006732176797,
+          -0.010107270154, 0.999946140547, -0.002357773197]
+
+img_time_offset: 0.0

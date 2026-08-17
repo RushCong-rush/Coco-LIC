@@ -73,6 +73,7 @@ Dr. Fu Zhang < fuzhang@hku.hk >.
 #include <sophus_lib/se3.hpp>
 //https://www.opencv-srf.com/2018/02/histogram-equalization.html
 #include <utils/log_utils.h>
+#include <camera/camera_geometry.h>
 
 inline char cv_wait_key(int ms )
 {
@@ -183,6 +184,9 @@ struct Image_frame
     cv::Mat m_img;
     cv::Mat m_raw_img;
     cv::Mat m_img_gray;
+    cv::Mat m_valid_mask;
+
+    std::shared_ptr<cocolic::CameraGeometry> m_camera_geometry;
 
     double m_fov_margin = 0.005;
     
@@ -192,6 +196,7 @@ struct Image_frame
     void set_pose(const eigen_q & pose_w2c_q, const vec_3 & pose_w2c_t );
     int set_frame_idx(int frame_idx);
     void set_intrinsic(Eigen::Matrix3d & camera_K);
+    void set_camera_geometry(const std::shared_ptr<cocolic::CameraGeometry> &camera_geometry);
     Image_frame(Eigen::Matrix3d &camera_K);
     void init_cubic_interpolation();
     void inverse_pose();    
@@ -242,5 +247,7 @@ inline std::shared_ptr< Image_frame > soft_copy_image_frame( const std::shared_p
     res_img_ptr->m_frame_idx = img_ptr->m_frame_idx;
     res_img_ptr->m_pose_c2w_q = img_ptr->m_pose_c2w_q;
     res_img_ptr->m_pose_c2w_t = img_ptr->m_pose_c2w_t;
+    res_img_ptr->m_camera_geometry = img_ptr->m_camera_geometry;
+    res_img_ptr->m_valid_mask = img_ptr->m_valid_mask;
     return res_img_ptr;
 }

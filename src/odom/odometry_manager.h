@@ -33,6 +33,7 @@
 #include <thread>
 
 #include <camera/r3live.hpp>
+#include <camera/camera_geometry.h>
 
 namespace cocolic
 {
@@ -146,6 +147,8 @@ namespace cocolic
     R3LIVE::Ptr camera_handler_;
 
     int64_t t_begin_add_cam_; // 
+    bool enable_visual_constraints_;
+    std::shared_ptr<CameraGeometry> camera_geometry_;
 
     OdometryViewer odom_viewer_;
 

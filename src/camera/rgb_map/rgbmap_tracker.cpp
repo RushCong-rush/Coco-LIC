@@ -196,28 +196,28 @@ void Rgbmap_tracker::reject_error_tracking_pts(std::shared_ptr<Image_frame> &img
     // cout << "Image pose: ";
     // img_pose->display_pose();
     scope_color(ANSI_COLOR_BLUE_BOLD);
-    for (auto it = m_map_rgb_pts_in_current_frame_pos.begin(); it != m_map_rgb_pts_in_current_frame_pos.end(); it++)
+    for (auto it = m_map_rgb_pts_in_current_frame_pos.begin();
+         it != m_map_rgb_pts_in_current_frame_pos.end();)
     {
         cv::Point2f predicted_pt = it->second;
         vec_3 pt_3d = ((RGB_pts *)it->first)->get_pos();
         int res = img_pose->project_3d_point_in_this_img(pt_3d, u, v, nullptr, 1.0);
+        bool reject = !res;
         if (res)
         {
-            if ((fabs(u - predicted_pt.x) > dis) || (fabs(v - predicted_pt.y) > dis))
-            {
-                // Remove tracking pts
-                m_map_rgb_pts_in_current_frame_pos.erase(it);
-                remove_count++;
-            }
+            Eigen::Vector2d difference(predicted_pt.x - u, predicted_pt.y - v);
+            if (img_pose->m_camera_geometry)
+                difference = img_pose->m_camera_geometry->pixelDifference(
+                    Eigen::Vector2d(predicted_pt.x, predicted_pt.y), Eigen::Vector2d(u, v));
+            reject = std::abs(difference.x()) > dis || std::abs(difference.y()) > dis;
         }
-        else
+        if (reject)
         {
-            // cout << pt_3d.transpose() << " | ";
-            // cout << "Predicted: " << vec_2(predicted_pt.x, predicted_pt.y).transpose() << ", measure: " << vec_2(u,
-            // v).transpose() << endl;
-            m_map_rgb_pts_in_current_frame_pos.erase(it);
+            it = m_map_rgb_pts_in_current_frame_pos.erase(it);
             remove_count++;
         }
+        else
+            ++it;
     }
     cout << "Total pts = " << total_count << ", rejected pts = " << remove_count << endl;
 }
@@ -307,12 +307,15 @@ void Rgbmap_tracker::track_img(std::shared_ptr<Image_frame> &img_pose, double di
 
     tim.tic("Reject_F");
     unsigned int pts_before_F = m_last_tracked_pts.size();
-    mat_F = cv::findFundamentalMat(m_last_tracked_pts, m_current_tracked_pts, cv::FM_RANSAC, 1.0, 0.997, status);
-    // mat_F = cv::findFundamentalMat( m_last_tracked_pts, m_current_tracked_pts, cv::FM_RANSAC, 1.0, 0.800, status );
-    unsigned int size_a = m_current_tracked_pts.size();
-    reduce_vector(m_last_tracked_pts, status);
-    reduce_vector(m_old_ids, status);
-    reduce_vector(m_current_tracked_pts, status);
+    const bool erp = img_pose->m_camera_geometry &&
+                     img_pose->m_camera_geometry->isEquirectangular();
+    if (!erp)
+    {
+        mat_F = cv::findFundamentalMat(m_last_tracked_pts, m_current_tracked_pts, cv::FM_RANSAC, 1.0, 0.997, status);
+        reduce_vector(m_last_tracked_pts, status);
+        reduce_vector(m_old_ids, status);
+        reduce_vector(m_current_tracked_pts, status);
+    }
     // m_current_tracked_pts_tmp.clear();
     // m_current_tracked_pts_tmp = m_current_tracked_pts;
 
@@ -324,7 +327,15 @@ void Rgbmap_tracker::track_img(std::shared_ptr<Image_frame> &img_pose, double di
         {
             RGB_pts *rgb_pts_ptr = ((RGB_pts *)m_rgb_pts_ptr_vec_in_last_frame[m_old_ids[i]]);
             m_map_rgb_pts_in_current_frame_pos[rgb_pts_ptr] = m_current_tracked_pts[i];
-            cv::Point2f pt_img_vel = (m_current_tracked_pts[i] - m_last_tracked_pts[i]) / frame_time_diff;
+            Eigen::Vector2d pixel_delta(
+                m_current_tracked_pts[i].x - m_last_tracked_pts[i].x,
+                m_current_tracked_pts[i].y - m_last_tracked_pts[i].y);
+            if (img_pose->m_camera_geometry)
+                pixel_delta = img_pose->m_camera_geometry->pixelDifference(
+                    Eigen::Vector2d(m_current_tracked_pts[i].x, m_current_tracked_pts[i].y),
+                    Eigen::Vector2d(m_last_tracked_pts[i].x, m_last_tracked_pts[i].y));
+            cv::Point2f pt_img_vel(pixel_delta.x() / frame_time_diff,
+                                   pixel_delta.y() / frame_time_diff);
             rgb_pts_ptr->m_img_pt_in_last_frame = vec_2(m_last_tracked_pts[i].x, m_last_tracked_pts[i].y);
             rgb_pts_ptr->m_img_pt_in_current_frame =
                 vec_2(m_current_tracked_pts[i].x, m_current_tracked_pts[i].y);

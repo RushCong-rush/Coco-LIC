@@ -212,7 +212,8 @@ namespace cocolic
     void AddPnPMeasurementAnalyticNURBS(const Eigen::Vector3d &visual_map_point,
                                         const Eigen::Vector2d &pixel_obs,
                                         int64_t cur_img_timestamp,
-                                        const SO3d &S_VtoI, const Eigen::Vector3d &p_VinI, const Eigen::Matrix3d &K,
+                                        const SO3d &S_VtoI, const Eigen::Vector3d &p_VinI,
+                                        const CameraGeometry &camera_geometry,
                                         double img_weight);
 
     void AddPhotometricMeasurementAutoDiffNURBS(const double &prev_pixel_intensity,
