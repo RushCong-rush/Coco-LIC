@@ -1,7 +1,7 @@
 odometry_mode: 1
 
-lidar_yaml: /hilti_erp_exp04/lidar.yaml
-imu_yaml: /hilti_erp_exp04/imu.yaml
+lidar_yaml: /hilti_erp/lidar.yaml
+imu_yaml: /hilti_erp/imu.yaml
 camera_yaml: /hilti_erp_exp04/camera.yaml
 
 bag_path: /path/to/xxx.bag
