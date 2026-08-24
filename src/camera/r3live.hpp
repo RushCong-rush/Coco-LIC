@@ -278,6 +278,7 @@ public:
     cv::Mat intrinsic, dist_coeffs;
     std::shared_ptr<cocolic::CameraGeometry> m_camera_geometry;
     cv::Mat m_valid_mask;
+    bool m_adaptive_image_brightness = false;
 
     mat_3_3 m_inital_rot_ext_i2c;
     vec_3  m_inital_pos_ext_i2c;
@@ -449,6 +450,10 @@ public:
                 cocolic::CameraModelFromString(camera_model),
                 static_cast<int>(m_vio_image_width), static_cast<int>(m_vio_image_heigh),
                 Eigen::Matrix3d(m_camera_intrinsic));
+            m_adaptive_image_brightness = node["adaptive_image_brightness"]
+                                              ? node["adaptive_image_brightness"].as<bool>()
+                                              : false;
+            op_track.set_adaptive_brightness(m_adaptive_image_brightness);
             if (node["valid_mask_path"])
             {
                 m_valid_mask = cv::imread(node["valid_mask_path"].as<std::string>(), cv::IMREAD_GRAYSCALE);

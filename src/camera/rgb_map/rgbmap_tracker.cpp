@@ -258,7 +258,20 @@ void Rgbmap_tracker::track_img(std::shared_ptr<Image_frame> &img_pose, double di
     if (m_current_frame.empty())
         return;
     cv::Mat frame_gray = img_pose->m_img_gray;
-    // cv::Mat frame_gray = img_pose->m_img_gray.clone();
+    if (m_adaptive_brightness && !last_img.empty())
+    {
+        const cv::Mat &mask = img_pose->m_valid_mask;
+        cv::Scalar current_mean, current_std, previous_mean, previous_std;
+        cv::meanStdDev(frame_gray, current_mean, current_std, mask);
+        cv::meanStdDev(last_img, previous_mean, previous_std, mask);
+        const double current_sigma = std::max(current_std[0], 1.0);
+        const double scale = std::min(2.0, std::max(0.5, previous_std[0] / current_sigma));
+        const double shift = previous_mean[0] - scale * current_mean[0];
+        cv::Mat normalized_gray;
+        frame_gray.convertTo(normalized_gray, CV_8U, scale, shift);
+        img_pose->m_img_gray = normalized_gray;
+        frame_gray = img_pose->m_img_gray;
+    }
     tim.tic("HE");
     tim.tic("opTrack");
     std::vector<uchar> status;

@@ -1,6 +1,7 @@
 %YAML:1.0
 
 camera_model: equirectangular
+adaptive_image_brightness: true
 image_topic: /odgs/panorama
 image_width: 1024
 image_height: 512

@@ -94,12 +94,15 @@ class Rgbmap_tracker
     eigen_q                                   q_last_estimated_q = eigen_q::Identity();
     vec_3                                     t_last_estimated = vec_3( 0, 0, 0 );
     std::shared_ptr< LK_optical_flow_kernel > m_lk_optical_flow_kernel;
+    bool                       m_adaptive_brightness = false;
     Rgbmap_tracker();
     ~Rgbmap_tracker(){};
 
     cv::Mat last_img;
     Eigen::aligned_vector<Eigen::Vector3d> new_points;
     Eigen::aligned_vector<Eigen::Vector2d> new_pixs;
+
+    void set_adaptive_brightness(bool enabled) { m_adaptive_brightness = enabled; }
 
     void set_intrinsic( Eigen::Matrix3d cam_K, Eigen::Matrix< double, 5, 1 > dist, cv::Size imageSize )
     {
