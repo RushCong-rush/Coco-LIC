@@ -69,6 +69,8 @@ namespace cocolic
     // PublishDenseCloud
     ros::Publisher pub_target_dense_cloud_;
     ros::Publisher pub_source_dense_cloud_;
+    ros::Publisher pub_source_raw_cloud_;
+    double raw_cloud_min_distance_squared_ = 0.0;
 
     // PublishSplineTrajectory
     ros::Publisher pub_spline_trajectory_;
@@ -138,6 +140,13 @@ namespace cocolic
           nh.advertise<sensor_msgs::PointCloud2>("/lio/target_dense_cloud", 10);
       pub_source_dense_cloud_ =
           nh.advertise<sensor_msgs::PointCloud2>("/lio/source_dense_cloud", 10);
+      pub_source_raw_cloud_ =
+          nh.advertise<sensor_msgs::PointCloud2>("/lio/source_raw_cloud", 10);
+      double raw_cloud_min_distance_m = 0.0;
+      nh.param<double>("raw_cloud_min_distance_m", raw_cloud_min_distance_m, 0.0);
+      if (raw_cloud_min_distance_m > 0.0)
+        raw_cloud_min_distance_squared_ =
+            raw_cloud_min_distance_m * raw_cloud_min_distance_m;
 
       /// spline trajectory
       pub_spline_trajectory_ =
@@ -770,7 +779,9 @@ namespace cocolic
         pub_target_dense_cloud_.publish(target_msg);
       }
 
-      if (pub_source_dense_cloud_.getNumSubscribers() == 0)
+      const bool publish_dense = pub_source_dense_cloud_.getNumSubscribers() != 0;
+      const bool publish_raw = pub_source_raw_cloud_.getNumSubscribers() != 0;
+      if (!publish_dense && !publish_raw)
       {
         return;
       }
@@ -795,27 +806,28 @@ namespace cocolic
       if (start_idx < 0)
         start_idx = 0;
 
-      if (pub_source_dense_cloud_.getNumSubscribers() != 0)
+      auto publish_source_cloud = [&](const PosCloud::Ptr &input_cloud,
+                                      ros::Publisher &publisher,
+                                      double min_distance_squared)
       {
         VPointCloud source_cloud;
-        for (size_t i = 0; i < source_feature.surface_features->size(); i++)
+        source_cloud.reserve(input_cloud->size());
+        for (const auto &input_point : input_cloud->points)
         {
-          int64_t point_timestamp =
-              source_feature.surface_features->points[i].timestamp;
+          int64_t point_timestamp = input_point.timestamp;
           if (point_timestamp >= trajectory->maxTimeNsNURBS())
             continue;
+          Eigen::Vector3d point_local(input_point.x, input_point.y, input_point.z);
+          if (point_local.squaredNorm() < min_distance_squared)
+            continue;
           SE3d point_pos = trajectory->GetLidarPoseNURBS(point_timestamp, start_idx);
-          Eigen::Vector3d point_local(
-              source_feature.surface_features->points[i].x,
-              source_feature.surface_features->points[i].y,
-              source_feature.surface_features->points[i].z);
           Eigen::Vector3d point_out =
               point_pos.so3() * point_local + point_pos.translation();
           VPoint p;
           p.x = point_out(0);
           p.y = point_out(1);
           p.z = point_out(2);
-          p.intensity = source_feature.surface_features->points[i].intensity;
+          p.intensity = input_point.intensity;
 
           // if (p.x <= 0) continue;
           // if (p.x <= 0.3 && p.z >= 0.01) continue;
@@ -827,8 +839,15 @@ namespace cocolic
         pcl::toROSMsg(source_cloud, source_msg);
         source_msg.header.stamp = ros::Time::now();
         source_msg.header.frame_id = "map";
-        pub_source_dense_cloud_.publish(source_msg);
-      }
+        publisher.publish(source_msg);
+      };
+
+      if (publish_dense)
+        publish_source_cloud(source_feature.surface_features,
+                             pub_source_dense_cloud_, 0.0);
+      if (publish_raw)
+        publish_source_cloud(source_feature.full_cloud, pub_source_raw_cloud_,
+                             raw_cloud_min_distance_squared_);
     }
 
     void ErrorStatistics(
