@@ -41,6 +41,9 @@ int main(int argc, char **argv) {
   std::cout << "\n🥥 Start Coco-LIC Odometry 🥥";
 
   OdometryManager odom_manager(config_node, nh);
+  int expected_gs_image_subscribers;
+  nh.param<int>("expected_gs_image_subscribers", expected_gs_image_subscribers, 1);
+  odom_manager.WaitFor3DGSSubscribers(expected_gs_image_subscribers);
   odom_manager.RunBag();
 
   double t_traj_max = odom_manager.SaveOdometry();

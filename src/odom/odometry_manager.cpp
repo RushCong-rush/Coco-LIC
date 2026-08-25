@@ -141,6 +141,25 @@ namespace cocolic
     // LOG(INFO) << std::fixed << std::setprecision(4);
   }
 
+  void OdometryManager::WaitFor3DGSSubscribers(int expected_image_subscribers)
+  {
+    if (!if_3dgs_)
+      return;
+
+    ros::Rate wait_rate(100);
+    while (ros::ok())
+    {
+      if (odom_viewer_.pub_gs_image_.getNumSubscribers() >= expected_image_subscribers &&
+          odom_viewer_.pub_gs_depth_.getNumSubscribers() >= 1 &&
+          odom_viewer_.pub_gs_pose_.getNumSubscribers() >= 1 &&
+          odom_viewer_.pub_gs_points_.getNumSubscribers() >= 1)
+      {
+        return;
+      }
+      wait_rate.sleep();
+    }
+  }
+
   bool OdometryManager::CreateCacheFolder(const std::string &config_path,
                                           const std::string &bag_path)
   {

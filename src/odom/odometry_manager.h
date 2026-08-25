@@ -50,6 +50,8 @@ namespace cocolic
   public:
     OdometryManager(const YAML::Node &node, ros::NodeHandle &nh);
 
+    void WaitFor3DGSSubscribers(int expected_image_subscribers);
+
     void RunBag();
 
     void RunInSubscribeMode();
