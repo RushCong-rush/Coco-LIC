@@ -1,0 +1,27 @@
+%YAML:1.0
+
+camera_model: equirectangular
+image_topic: /odgs/panorama
+image_width: 1024
+image_height: 512
+valid_mask_path: /workspace/output/datasets/panovild_seq1_odgs_valid_mask.png
+
+# Legacy pinhole members are still read, but ERP projection does not use them.
+cam_fx: 1.0
+cam_fy: 1.0
+cam_cx: 512.0
+cam_cy: 256.0
+cam_d0: 0.0
+cam_d1: 0.0
+cam_d2: 0.0
+cam_d3: 0.0
+cam_d4: 0.0
+
+# Virtual ERP camera (right, down, forward) to Ladybug Head/assumed IMU frame.
+CameraExtrinsics:
+    Trans: [0, 0, 0]
+    Rot: [0, 0, 1,
+          -1, 0, 0,
+          0, -1, 0]
+
+img_time_offset: 0.0

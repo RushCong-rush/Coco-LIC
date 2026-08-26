@@ -1,0 +1,38 @@
+lidar0:
+    topic: /hesai/pandar
+    is_livox: false
+    # Dataset calibration: LiDAR to Ladybug Head. The IMU/head identity is a
+    # documented adapter assumption because no separate IMU extrinsic exists.
+    Extrinsics:
+        Trans: [-0.1, -0.04, 0.19]
+        Rot: [0.9997115139677692, -0.02399668435582667, 0.00102370903941593,
+              0.02399768406750726, 0.9997115379654573, -0.0009757141671371803,
+              -0.0009999998333333417, 0.0009999993333334666, 0.9999990000003334]
+num_lidars: 1
+lidar_timestamp_end: false
+
+VLP16:
+    N_SCAN: 64
+    Horizon_SCAN: 1024
+    edge_threshold: 1.0
+    surf_threshold: 0.1
+    odometry_surface_leaf_size: 0.4
+    min_distance: 1.0
+    max_distance: 120.0
+
+use_corner_feature: false
+current_scan_param:
+    corner_leaf_size: 0.3
+    surface_leaf_size: 0.4
+    edge_min_valid_num: 10
+    surf_min_valid_num: 100
+    correspondence_downsample: 2
+keyframe_strategy:
+    angle_degree: 10
+    dist_meter: 1.0
+    time_second: 10
+map_param:
+    keyframe_search_radius: 50.0
+    keyframe_search_time: 10.0
+    keyframe_density: 1.0
+    cloud_reserved_time: -1

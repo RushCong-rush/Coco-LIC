@@ -1,0 +1,14 @@
+imu_topic: /pano/imu
+
+imu_excite_threshold: 0.5
+gravity_mag: 9.81
+if_normalized: false
+if_use_init_bg: false
+
+# PanoVILD does not publish a separate IMU-to-head calibration. The adapter
+# therefore treats its IMU measurements as Ladybug Head-frame measurements.
+IMUExtrinsics:
+    Trans: [0, 0, 0]
+    Rot: [1, 0, 0,
+          0, 1, 0,
+          0, 0, 1]
