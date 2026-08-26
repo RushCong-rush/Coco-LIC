@@ -140,6 +140,7 @@ namespace cocolic
 
     int n_scan;
     double blind, inf_bound;
+    bool use_radial_distance_filter;
     int group_size;
     double disA, disB;
     double limit_maxmid, limit_midmin, limit_maxmin;

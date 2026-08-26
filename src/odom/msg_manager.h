@@ -253,7 +253,7 @@ namespace cocolic
     void RemoveBeginData(int64_t start_time, int64_t relative_start_time = 0);
 
   private:
-    void LoadBag(const YAML::Node &node);
+    void LoadBag(const YAML::Node &node, ros::NodeHandle &nh);
 
     bool HasEnvMsg() const;
 

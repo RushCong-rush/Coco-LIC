@@ -1,0 +1,28 @@
+%YAML:1.0
+
+camera_model: equirectangular
+image_topic: /odgs/panorama
+image_width: 1024
+image_height: 512
+
+# Legacy perspective members remain required by the visual frontend. ERP
+# projection uses spherical directions and ignores these values.
+cam_fx: 1.0
+cam_fy: 1.0
+cam_cx: 512.0
+cam_cy: 256.0
+cam_d0: 0.0
+cam_d1: 0.0
+cam_d2: 0.0
+cam_d3: 0.0
+cam_d4: 0.0
+
+# Insta360 X4 optical frame to the MID-360 built-in IMU. This composes the
+# measured X4-to-D435 relation with the official D435-to-MID-360 calibration.
+CameraExtrinsics:
+    Trans: [-0.7642402132, 0.0115969547, 0.2909246988]
+    Rot: [0.0565479710, 0.5328198115, 0.8443372818,
+          -0.9974861037, -0.0060241573, 0.0706063638,
+          0.0427068997, -0.8462073001, 0.5311396792]
+
+img_time_offset: 0.0

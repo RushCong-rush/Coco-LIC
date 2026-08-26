@@ -132,13 +132,15 @@ namespace cocolic
       velodyne_feature_extraction_ =
           std::make_shared<VelodyneFeatureExtraction>(lidar_node);
 
-    LoadBag(node);
+    LoadBag(node, nh);
   }
 
-  void MsgManager::LoadBag(const YAML::Node &node)
+  void MsgManager::LoadBag(const YAML::Node &node, ros::NodeHandle &nh)
   {
     double bag_start = node["bag_start"].as<double>();
     double bag_durr = node["bag_durr"].as<double>();
+    nh.param<double>("bag_start", bag_start, bag_start);
+    nh.param<double>("bag_durr", bag_durr, bag_durr);
 
     std::vector<std::string> topics;
     topics.push_back(imu_topic_); // imu

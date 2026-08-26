@@ -31,6 +31,9 @@ namespace cocolic
     auto const &livox_node = node["Livox"];
     n_scan = livox_node["n_scan"].as<int>();
     blind = livox_node["blind"].as<double>();
+    use_radial_distance_filter = livox_node["use_radial_distance_filter"]
+                                     ? livox_node["use_radial_distance_filter"].as<bool>()
+                                     : false;
     inf_bound = livox_node["inf_bound"].as<double>();
     group_size = livox_node["group_size"].as<int>();
     disA = livox_node["disA"].as<double>();
@@ -168,26 +171,36 @@ namespace cocolic
     // ANCHOR - remove nearing pts.
     for (uint i = 1; i < plsize; i++)
     {
-      if ((lidar_msg->points[i].line < n_scan) && (!IS_VALID(lidar_msg->points[i].x)) && (!IS_VALID(lidar_msg->points[i].y)) && (!IS_VALID(lidar_msg->points[i].z)) && lidar_msg->points[i].x > 0.7)
+      const auto &point = lidar_msg->points[i];
+      const double squared_range = point.x * point.x + point.y * point.y + point.z * point.z;
+      const bool outside_blind = use_radial_distance_filter
+                                     ? squared_range > blind * blind
+                                     : point.x > 0.7;
+      if ((point.line < n_scan) && (!IS_VALID(point.x)) && (!IS_VALID(point.y)) &&
+          (!IS_VALID(point.z)) && outside_blind)
       {
         // https://github.com/Livox-SDK/Livox-SDK/wiki/Livox-SDK-Communication-Protocol
         // See [3.4 Tag Information]
-        if ((lidar_msg->points[i].x > 2.0) && (((lidar_msg->points[i].tag & 0x03) != 0x00) || ((lidar_msg->points[i].tag & 0x0C) != 0x00)))
+        const bool beyond_tag_filter_distance = use_radial_distance_filter
+                                                    ? squared_range > 4.0
+                                                    : point.x > 2.0;
+        if (beyond_tag_filter_distance &&
+            (((point.tag & 0x03) != 0x00) || ((point.tag & 0x0C) != 0x00)))
         {
           // Remove the bad quality points
           continue;
         }
         // clang-format on
-        (*p_full_cloud)[i].x = lidar_msg->points[i].x;
-        (*p_full_cloud)[i].y = lidar_msg->points[i].y;
-        (*p_full_cloud)[i].z = lidar_msg->points[i].z;
-        (*p_full_cloud)[i].intensity = lidar_msg->points[i].reflectivity;
-        (*p_full_cloud)[i].time = int64_t(lidar_msg->points[i].offset_time);
+        (*p_full_cloud)[i].x = point.x;
+        (*p_full_cloud)[i].y = point.y;
+        (*p_full_cloud)[i].z = point.z;
+        (*p_full_cloud)[i].intensity = point.reflectivity;
+        (*p_full_cloud)[i].time = int64_t(point.offset_time);
 
         if ((std::abs((*p_full_cloud)[i].x - (*p_full_cloud)[i - 1].x) > 1e-7) || (std::abs((*p_full_cloud)[i].y - (*p_full_cloud)[i - 1].y) > 1e-7) ||
             (std::abs((*p_full_cloud)[i].z - (*p_full_cloud)[i - 1].z) > 1e-7))
         {
-          in_cloud_vec[lidar_msg->points[i].line]->push_back((*p_full_cloud)[i]);
+          in_cloud_vec[point.line]->push_back((*p_full_cloud)[i]);
         }
       }
     }
