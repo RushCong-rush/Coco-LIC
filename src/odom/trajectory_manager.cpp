@@ -160,7 +160,14 @@ namespace cocolic
            "lidar_factors,imu_factors,camera_factors,prior_factors,bias_factors,"
            "coarse_initial_cost,coarse_final_cost,coarse_iterations,"
            "coarse_optimization_time_ms,continuation_prediction_time_ms,"
-           "continuation_factors\n";
+           "continuation_priors,continuation_factors,"
+           "continuation_position_std_m,continuation_rotation_std_rad,"
+           "continuation_factor_position_std_m,"
+           "continuation_factor_rotation_std_rad,"
+           "continuation_coarse_position_correction_m,"
+           "continuation_coarse_rotation_correction_rad,"
+           "continuation_final_position_correction_m,"
+           "continuation_final_rotation_correction_rad\n";
   }
 
   void TrajectoryManager::ConfigureProbabilisticContinuation(
@@ -313,7 +320,8 @@ namespace cocolic
     continuation_priors_.clear();
     continuation_prediction_time_ms_ = 0.0;
     if (predictor_mode_ == ControlPointPredictorMode::Copy &&
-        continuation_factor_mode_ == ContinuationFactorMode::None)
+        continuation_factor_mode_ == ContinuationFactorMode::None &&
+        cp_uncertainty_output_dir_.empty())
       return;
     if (new_knot_count == 0 || first_new_knot < 2)
       return;
@@ -507,6 +515,101 @@ namespace cocolic
         [](const TrajectoryCovariance &query) { return query.success; });
     const int iterations =
         summary.num_successful_steps + summary.num_unsuccessful_steps;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    double continuation_position_std_sum = 0.0;
+    double continuation_rotation_std_sum = 0.0;
+    double continuation_factor_position_std_sum = 0.0;
+    double continuation_factor_rotation_std_sum = 0.0;
+    double continuation_coarse_position_correction_sum = 0.0;
+    double continuation_coarse_rotation_correction_sum = 0.0;
+    double continuation_final_position_correction_sum = 0.0;
+    double continuation_final_rotation_correction_sum = 0.0;
+    size_t continuation_coarse_count = 0;
+    for (const KnotContinuationPrior &prior : continuation_priors_)
+    {
+      const double position_variance =
+          std::max(0.0, prior.position_covariance.trace() / 3.0);
+      const double rotation_variance =
+          std::max(0.0, prior.rotation_covariance.trace() / 3.0);
+      continuation_position_std_sum += std::sqrt(position_variance);
+      continuation_rotation_std_sum += std::sqrt(rotation_variance);
+
+      if (continuation_factor_mode_ != ContinuationFactorMode::None)
+      {
+        const double factor_position_variance =
+            position_process_std_m_ * position_process_std_m_ +
+            (continuation_factor_mode_ == ContinuationFactorMode::Adaptive
+                 ? position_variance
+                 : 0.0);
+        const double factor_rotation_variance =
+            rotation_process_std_rad_ * rotation_process_std_rad_ +
+            (continuation_factor_mode_ == ContinuationFactorMode::Adaptive
+                 ? rotation_variance
+                 : 0.0);
+        continuation_factor_position_std_sum +=
+            std::sqrt(factor_position_variance);
+        continuation_factor_rotation_std_sum +=
+            std::sqrt(factor_rotation_variance);
+      }
+
+      if (prior.knot_index < coarse_positions_.size() &&
+          prior.knot_index < coarse_rotations_.size())
+      {
+        continuation_coarse_position_correction_sum +=
+            (coarse_positions_[prior.knot_index] - prior.position_mean).norm();
+        continuation_coarse_rotation_correction_sum +=
+            (prior.rotation_mean.inverse() *
+             coarse_rotations_[prior.knot_index]).log().norm();
+        ++continuation_coarse_count;
+      }
+      continuation_final_position_correction_sum +=
+          (trajectory_->getKnotPos(prior.knot_index) -
+           prior.position_mean).norm();
+      continuation_final_rotation_correction_sum +=
+          (prior.rotation_mean.inverse() *
+           trajectory_->getKnotSO3(prior.knot_index)).log().norm();
+    }
+    const size_t continuation_prior_count = continuation_priors_.size();
+    const size_t continuation_factor_count =
+        continuation_factor_mode_ == ContinuationFactorMode::None
+            ? 0
+            : continuation_prior_count;
+    const double continuation_position_std_mean =
+        continuation_prior_count > 0
+            ? continuation_position_std_sum / continuation_prior_count
+            : nan;
+    const double continuation_rotation_std_mean =
+        continuation_prior_count > 0
+            ? continuation_rotation_std_sum / continuation_prior_count
+            : nan;
+    const double continuation_factor_position_std_mean =
+        continuation_factor_count > 0
+            ? continuation_factor_position_std_sum / continuation_factor_count
+            : nan;
+    const double continuation_factor_rotation_std_mean =
+        continuation_factor_count > 0
+            ? continuation_factor_rotation_std_sum / continuation_factor_count
+            : nan;
+    const double continuation_coarse_position_correction_mean =
+        continuation_coarse_count > 0
+            ? continuation_coarse_position_correction_sum /
+                  continuation_coarse_count
+            : nan;
+    const double continuation_coarse_rotation_correction_mean =
+        continuation_coarse_count > 0
+            ? continuation_coarse_rotation_correction_sum /
+                  continuation_coarse_count
+            : nan;
+    const double continuation_final_position_correction_mean =
+        continuation_prior_count > 0
+            ? continuation_final_position_correction_sum /
+                  continuation_prior_count
+            : nan;
+    const double continuation_final_rotation_correction_mean =
+        continuation_prior_count > 0
+            ? continuation_final_rotation_correction_sum /
+                  continuation_prior_count
+            : nan;
 
     optimization_window_stream_
         << window_index << ',' << window_start_time_s << ','
@@ -523,10 +626,15 @@ namespace cocolic
         << coarse_initial_cost_ << ',' << coarse_final_cost_ << ','
         << coarse_iterations_ << ',' << coarse_optimization_time_ms_ << ','
         << continuation_prediction_time_ms_ << ','
-        << (continuation_factor_mode_ == ContinuationFactorMode::None
-                ? 0
-                : continuation_priors_.size())
-        << '\n';
+        << continuation_prior_count << ',' << continuation_factor_count << ','
+        << continuation_position_std_mean << ','
+        << continuation_rotation_std_mean << ','
+        << continuation_factor_position_std_mean << ','
+        << continuation_factor_rotation_std_mean << ','
+        << continuation_coarse_position_correction_mean << ','
+        << continuation_coarse_rotation_correction_mean << ','
+        << continuation_final_position_correction_mean << ','
+        << continuation_final_rotation_correction_mean << '\n';
 
     for (const TrajectoryCovariance &trajectory_query :
          covariance.trajectory_queries)
@@ -549,7 +657,6 @@ namespace cocolic
           << r_cov(1, 2) << ',' << r_cov(2, 2) << '\n';
     }
 
-    const double nan = std::numeric_limits<double>::quiet_NaN();
     for (const ControlPointCovariance &control_point :
          covariance.control_points)
     {
