@@ -26,9 +26,36 @@
 #include <utils/opt_weight.h>
 
 #include <fstream>
+#include <map>
+#include <string>
 
 namespace cocolic
 {
+
+  enum class ControlPointPredictorMode
+  {
+    Copy,
+    ConstantVelocity,
+    GaussianProcess
+  };
+
+  enum class ContinuationFactorMode
+  {
+    None,
+    Fixed,
+    Adaptive
+  };
+
+  struct KnotContinuationPrior
+  {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    size_t knot_index = 0;
+    SO3d rotation_mean;
+    Eigen::Vector3d position_mean = Eigen::Vector3d::Zero();
+    Eigen::Matrix3d rotation_covariance = Eigen::Matrix3d::Zero();
+    Eigen::Matrix3d position_covariance = Eigen::Matrix3d::Zero();
+  };
 
   struct TimeParam
   {
@@ -149,6 +176,16 @@ namespace cocolic
         const std::string &output_dir,
         const std::string &query_times_path = "");
 
+    void ConfigureProbabilisticContinuation(
+        const std::string &predictor_mode,
+        const std::string &factor_mode,
+        int gp_history_size,
+        double gp_length_scale_s,
+        double position_covariance_scale,
+        double rotation_covariance_scale,
+        double position_process_std_m,
+        double rotation_process_std_rad);
+
     void UpdateLiDARAttribute(double scan_time_min, double scan_time_max);
 
     void Log(std::string descri) const;
@@ -237,6 +274,27 @@ namespace cocolic
 
     void CaptureCoarseControlPoints();
 
+    void BuildKnotContinuationPriors(size_t first_new_knot,
+                                     size_t new_knot_count);
+
+    bool PredictGaussianProcessResidual(
+        const std::vector<double> &history_times_s,
+        const Eigen::aligned_vector<Eigen::Vector3d> &residuals,
+        const Eigen::aligned_vector<Eigen::Matrix3d> &observation_covariances,
+        double query_time_s,
+        double signal_std_floor,
+        Eigen::Vector3d &mean,
+        Eigen::Matrix3d &covariance) const;
+
+    double Matern32Kernel(double first_time_s, double second_time_s,
+                         double signal_variance) const;
+
+    Eigen::Matrix3d ControlPointObservationCovariance(
+        size_t knot_index, bool rotation) const;
+
+    void StoreControlPointCovariances(
+        const ControlPointCovarianceResult &covariance);
+
     void WriteControlPointDiagnostics(
         TrajectoryEstimator &estimator,
         const ceres::Solver::Summary &summary,
@@ -315,6 +373,24 @@ namespace cocolic
     bool cp_uncertainty_has_query_times_ = false;
     Eigen::aligned_vector<Eigen::Vector3d> coarse_positions_;
     Eigen::aligned_vector<SO3d> coarse_rotations_;
+
+    ControlPointPredictorMode predictor_mode_ =
+        ControlPointPredictorMode::Copy;
+    ContinuationFactorMode continuation_factor_mode_ =
+        ContinuationFactorMode::None;
+    int gp_history_size_ = 6;
+    double gp_length_scale_s_ = 0.3;
+    double position_covariance_scale_ = 40000.0;
+    double rotation_covariance_scale_ = 10000.0;
+    double position_process_std_m_ = 0.05;
+    double rotation_process_std_rad_ = 0.02;
+    std::map<size_t, ControlPointCovariance> stored_control_point_covariances_;
+    Eigen::aligned_vector<KnotContinuationPrior> continuation_priors_;
+    double coarse_initial_cost_ = 0.0;
+    double coarse_final_cost_ = 0.0;
+    double coarse_optimization_time_ms_ = 0.0;
+    double continuation_prediction_time_ms_ = 0.0;
+    int coarse_iterations_ = 0;
 
   public:
     void ClearVisual()

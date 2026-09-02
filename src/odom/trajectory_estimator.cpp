@@ -346,6 +346,23 @@ namespace cocolic
     problem_->AddResidualBlock(cost_function, NULL, vec);
   }
 
+  void TrajectoryEstimator::AddControlPointPrior(
+      size_t knot_index, const SO3d &rotation_mean,
+      const Eigen::Vector3d &position_mean,
+      const Eigen::Matrix3d &rotation_sqrt_info,
+      const Eigen::Matrix3d &position_sqrt_info)
+  {
+    analytic_derivative::ControlPointPriorFactor *cost_function =
+        new analytic_derivative::ControlPointPriorFactor(
+            rotation_mean, position_mean, rotation_sqrt_info,
+            position_sqrt_info);
+    double *rotation = trajectory_->getKnotSO3(knot_index).data();
+    double *position = trajectory_->getKnotPos(knot_index).data();
+    problem_->AddParameterBlock(rotation, 4, analytic_local_parameterization_);
+    problem_->AddParameterBlock(position, 3);
+    problem_->AddResidualBlock(cost_function, nullptr, rotation, position);
+  }
+
   void TrajectoryEstimator::AddPoseMeasurementAnalyticDiffNURBS(const PoseData &pose_data,
                                                                 double pos_weight, double rot_weight)
   {
@@ -546,16 +563,19 @@ namespace cocolic
       knot_indices.push_back(i);
     }
 
-    for (size_t a = 0; a < knot_indices.size(); ++a)
+    if (!trajectory_times_ns.empty())
     {
-      for (size_t b = a + 1; b < knot_indices.size(); ++b)
+      for (size_t a = 0; a < knot_indices.size(); ++a)
       {
-        const size_t i = knot_indices[a];
-        const size_t j = knot_indices[b];
-        covariance_blocks.emplace_back(trajectory_->getKnotPos(i).data(),
-                                       trajectory_->getKnotPos(j).data());
-        covariance_blocks.emplace_back(trajectory_->getKnotSO3(i).data(),
-                                       trajectory_->getKnotSO3(j).data());
+        for (size_t b = a + 1; b < knot_indices.size(); ++b)
+        {
+          const size_t i = knot_indices[a];
+          const size_t j = knot_indices[b];
+          covariance_blocks.emplace_back(trajectory_->getKnotPos(i).data(),
+                                         trajectory_->getKnotPos(j).data());
+          covariance_blocks.emplace_back(trajectory_->getKnotSO3(i).data(),
+                                         trajectory_->getKnotSO3(j).data());
+        }
       }
     }
 

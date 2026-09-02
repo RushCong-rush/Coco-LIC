@@ -34,6 +34,7 @@
 #include <odom/factor/analytic_diff/image_feature_factor.h>
 #include <odom/factor/analytic_diff/lidar_feature_factor.h>
 #include <odom/factor/analytic_diff/marginalization_factor.h>
+#include <odom/factor/analytic_diff/control_point_prior_factor.h>
 #include <odom/factor/analytic_diff/trajectory_value_factor.h>
 
 namespace cocolic
@@ -201,6 +202,12 @@ namespace cocolic
                        double *bias_acc_j, double dt,
                        const Eigen::Matrix<double, 6, 1> &info_vec,
                        bool marg_this_factor = false, bool marg_all_bias = false);
+
+    void AddControlPointPrior(size_t knot_index,
+                              const SO3d &rotation_mean,
+                              const Eigen::Vector3d &position_mean,
+                              const Eigen::Matrix3d &rotation_sqrt_info,
+                              const Eigen::Matrix3d &position_sqrt_info);
 
     void AddGravityFactor(double *gravity, const Eigen::Vector3d &info_vec,
                           bool marg_this_factor = false);

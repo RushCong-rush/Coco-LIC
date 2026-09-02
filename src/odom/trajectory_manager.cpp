@@ -29,6 +29,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <stdexcept>
 std::fstream myfile_t_ba;
 namespace cocolic
 {
@@ -156,7 +157,279 @@ namespace cocolic
            "covariance_control_points,covariance_time_ms,"
            "solution_usable,initial_cost,final_cost,iterations,"
            "successful_steps,unsuccessful_steps,optimization_time_ms,"
-           "lidar_factors,imu_factors,camera_factors,prior_factors,bias_factors\n";
+           "lidar_factors,imu_factors,camera_factors,prior_factors,bias_factors,"
+           "coarse_initial_cost,coarse_final_cost,coarse_iterations,"
+           "coarse_optimization_time_ms,continuation_prediction_time_ms,"
+           "continuation_factors\n";
+  }
+
+  void TrajectoryManager::ConfigureProbabilisticContinuation(
+      const std::string &predictor_mode,
+      const std::string &factor_mode,
+      int gp_history_size,
+      double gp_length_scale_s,
+      double position_covariance_scale,
+      double rotation_covariance_scale,
+      double position_process_std_m,
+      double rotation_process_std_rad)
+  {
+    if (predictor_mode == "copy")
+      predictor_mode_ = ControlPointPredictorMode::Copy;
+    else if (predictor_mode == "constant_velocity")
+      predictor_mode_ = ControlPointPredictorMode::ConstantVelocity;
+    else if (predictor_mode == "gp")
+      predictor_mode_ = ControlPointPredictorMode::GaussianProcess;
+    else
+      throw std::invalid_argument("Unknown control-point predictor: " +
+                                  predictor_mode);
+
+    if (factor_mode == "none")
+      continuation_factor_mode_ = ContinuationFactorMode::None;
+    else if (factor_mode == "fixed")
+      continuation_factor_mode_ = ContinuationFactorMode::Fixed;
+    else if (factor_mode == "adaptive")
+      continuation_factor_mode_ = ContinuationFactorMode::Adaptive;
+    else
+      throw std::invalid_argument("Unknown continuation factor: " +
+                                  factor_mode);
+
+    if (gp_history_size < 2 || gp_length_scale_s <= 0.0 ||
+        position_covariance_scale <= 0.0 ||
+        rotation_covariance_scale <= 0.0 ||
+        position_process_std_m <= 0.0 || rotation_process_std_rad <= 0.0)
+    {
+      throw std::invalid_argument("Invalid probabilistic continuation parameter");
+    }
+
+    gp_history_size_ = gp_history_size;
+    gp_length_scale_s_ = gp_length_scale_s;
+    position_covariance_scale_ = position_covariance_scale;
+    rotation_covariance_scale_ = rotation_covariance_scale;
+    position_process_std_m_ = position_process_std_m;
+    rotation_process_std_rad_ = rotation_process_std_rad;
+  }
+
+  double TrajectoryManager::Matern32Kernel(
+      double first_time_s, double second_time_s,
+      double signal_variance) const
+  {
+    const double scaled_distance =
+        std::sqrt(3.0) * std::abs(first_time_s - second_time_s) /
+        gp_length_scale_s_;
+    return signal_variance * (1.0 + scaled_distance) *
+           std::exp(-scaled_distance);
+  }
+
+  Eigen::Matrix3d TrajectoryManager::ControlPointObservationCovariance(
+      size_t knot_index, bool rotation) const
+  {
+    const auto covariance = stored_control_point_covariances_.find(knot_index);
+    if (covariance == stored_control_point_covariances_.end())
+    {
+      const double fallback_std =
+          rotation ? rotation_process_std_rad_ : position_process_std_m_;
+      return fallback_std * fallback_std * Eigen::Matrix3d::Identity();
+    }
+
+    Eigen::Matrix3d result = rotation ? covariance->second.rotation
+                                      : covariance->second.position;
+    result *= rotation ? rotation_covariance_scale_
+                       : position_covariance_scale_;
+    result = 0.5 * (result + result.transpose());
+    result.diagonal().array() += 1e-12;
+    return result;
+  }
+
+  bool TrajectoryManager::PredictGaussianProcessResidual(
+      const std::vector<double> &history_times_s,
+      const Eigen::aligned_vector<Eigen::Vector3d> &residuals,
+      const Eigen::aligned_vector<Eigen::Matrix3d> &observation_covariances,
+      double query_time_s,
+      double signal_std_floor,
+      Eigen::Vector3d &mean,
+      Eigen::Matrix3d &covariance) const
+  {
+    const size_t history_size = history_times_s.size();
+    if (history_size == 0 || residuals.size() != history_size ||
+        observation_covariances.size() != history_size)
+      return false;
+
+    double signal_variance = 0.0;
+    for (const Eigen::Vector3d &residual : residuals)
+      signal_variance += residual.squaredNorm();
+    signal_variance /= 3.0 * history_size;
+    signal_variance =
+        std::max(signal_variance, signal_std_floor * signal_std_floor);
+
+    const Eigen::Index dimension = 3 * history_size;
+    Eigen::MatrixXd kernel = Eigen::MatrixXd::Zero(dimension, dimension);
+    Eigen::VectorXd observations(dimension);
+    for (size_t i = 0; i < history_size; ++i)
+    {
+      observations.segment<3>(3 * i) = residuals[i];
+      for (size_t j = 0; j < history_size; ++j)
+      {
+        kernel.block<3, 3>(3 * i, 3 * j) =
+            Matern32Kernel(history_times_s[i], history_times_s[j],
+                           signal_variance) *
+            Eigen::Matrix3d::Identity();
+      }
+      kernel.block<3, 3>(3 * i, 3 * i) +=
+          observation_covariances[i];
+    }
+    kernel.diagonal().array() += 1e-12;
+
+    Eigen::LLT<Eigen::MatrixXd> decomposition(kernel);
+    if (decomposition.info() != Eigen::Success)
+      return false;
+
+    Eigen::MatrixXd query_cross = Eigen::MatrixXd::Zero(dimension, 3);
+    for (size_t i = 0; i < history_size; ++i)
+    {
+      query_cross.block<3, 3>(3 * i, 0) =
+          Matern32Kernel(history_times_s[i], query_time_s,
+                         signal_variance) *
+          Eigen::Matrix3d::Identity();
+    }
+    mean = query_cross.transpose() * decomposition.solve(observations);
+    covariance =
+        Matern32Kernel(query_time_s, query_time_s, signal_variance) *
+            Eigen::Matrix3d::Identity() -
+        query_cross.transpose() * decomposition.solve(query_cross);
+    covariance = 0.5 * (covariance + covariance.transpose());
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> eigen_solver(covariance);
+    if (eigen_solver.info() != Eigen::Success || !mean.allFinite())
+      return false;
+    covariance = eigen_solver.eigenvectors() *
+                 eigen_solver.eigenvalues().cwiseMax(0.0).asDiagonal() *
+                 eigen_solver.eigenvectors().transpose();
+    return covariance.allFinite();
+  }
+
+  void TrajectoryManager::BuildKnotContinuationPriors(
+      size_t first_new_knot, size_t new_knot_count)
+  {
+    continuation_priors_.clear();
+    continuation_prediction_time_ms_ = 0.0;
+    if (predictor_mode_ == ControlPointPredictorMode::Copy &&
+        continuation_factor_mode_ == ContinuationFactorMode::None)
+      return;
+    if (new_knot_count == 0 || first_new_knot < 2)
+      return;
+    TicToc prediction_timer;
+
+    const size_t previous_knot = first_new_knot - 2;
+    const size_t last_knot = first_new_knot - 1;
+    const double previous_time_s =
+        trajectory_->knts.at(previous_knot) * NS_TO_S;
+    const double last_time_s = trajectory_->knts.at(last_knot) * NS_TO_S;
+    const double previous_dt_s = last_time_s - previous_time_s;
+    if (previous_dt_s <= 0.0)
+      throw std::runtime_error("Non-increasing control-point timestamps");
+
+    const Eigen::Vector3d last_position = trajectory_->getKnotPos(last_knot);
+    const Eigen::Vector3d position_velocity =
+        (last_position - trajectory_->getKnotPos(previous_knot)) /
+        previous_dt_s;
+    const SO3d last_rotation = trajectory_->getKnotSO3(last_knot);
+    const Eigen::Vector3d rotation_velocity =
+        (trajectory_->getKnotSO3(previous_knot).inverse() * last_rotation).log() /
+        previous_dt_s;
+
+    const size_t history_start = first_new_knot > size_t(gp_history_size_)
+                                     ? first_new_knot - gp_history_size_
+                                     : 0;
+    std::vector<double> history_times_s;
+    Eigen::aligned_vector<Eigen::Vector3d> position_residuals;
+    Eigen::aligned_vector<Eigen::Vector3d> rotation_residuals;
+    Eigen::aligned_vector<Eigen::Matrix3d> position_observation_covariances;
+    Eigen::aligned_vector<Eigen::Matrix3d> rotation_observation_covariances;
+    for (size_t i = history_start; i < first_new_knot; ++i)
+    {
+      const double time_s = trajectory_->knts.at(i) * NS_TO_S;
+      const double dt_s = time_s - last_time_s;
+      const Eigen::Vector3d cv_position =
+          last_position + position_velocity * dt_s;
+      const SO3d cv_rotation =
+          last_rotation * SO3d::exp(rotation_velocity * dt_s);
+      history_times_s.push_back(time_s);
+      position_residuals.push_back(trajectory_->getKnotPos(i) - cv_position);
+      rotation_residuals.push_back(
+          (cv_rotation.inverse() * trajectory_->getKnotSO3(i)).log());
+      position_observation_covariances.push_back(
+          ControlPointObservationCovariance(i, false));
+      rotation_observation_covariances.push_back(
+          ControlPointObservationCovariance(i, true));
+    }
+
+    continuation_priors_.reserve(new_knot_count);
+    for (size_t offset = 0; offset < new_knot_count; ++offset)
+    {
+      const size_t knot_index = first_new_knot + offset;
+      const double query_time_s = trajectory_->knts.at(knot_index) * NS_TO_S;
+      const double dt_s = query_time_s - last_time_s;
+      const Eigen::Vector3d cv_position =
+          last_position + position_velocity * dt_s;
+      const SO3d cv_rotation =
+          last_rotation * SO3d::exp(rotation_velocity * dt_s);
+
+      KnotContinuationPrior prior;
+      prior.knot_index = knot_index;
+      prior.position_covariance =
+          ControlPointObservationCovariance(last_knot, false);
+      prior.rotation_covariance =
+          ControlPointObservationCovariance(last_knot, true);
+
+      if (predictor_mode_ == ControlPointPredictorMode::Copy)
+      {
+        prior.position_mean = last_position;
+        prior.rotation_mean = last_rotation;
+      }
+      else if (predictor_mode_ == ControlPointPredictorMode::ConstantVelocity)
+      {
+        prior.position_mean = cv_position;
+        prior.rotation_mean = cv_rotation;
+      }
+      else
+      {
+        Eigen::Vector3d position_gp_mean;
+        Eigen::Vector3d rotation_gp_mean;
+        if (!PredictGaussianProcessResidual(
+                history_times_s, position_residuals,
+                position_observation_covariances, query_time_s,
+                position_process_std_m_, position_gp_mean,
+                prior.position_covariance) ||
+            !PredictGaussianProcessResidual(
+                history_times_s, rotation_residuals,
+                rotation_observation_covariances, query_time_s,
+                rotation_process_std_rad_, rotation_gp_mean,
+                prior.rotation_covariance))
+        {
+          throw std::runtime_error("Control-point GP prediction failed");
+        }
+        prior.position_mean = cv_position + position_gp_mean;
+        prior.rotation_mean = cv_rotation * SO3d::exp(rotation_gp_mean);
+      }
+
+      trajectory_->setKnotPos(prior.position_mean, knot_index);
+      trajectory_->setKnotSO3(prior.rotation_mean, knot_index);
+      continuation_priors_.push_back(prior);
+    }
+    continuation_prediction_time_ms_ = prediction_timer.toc();
+  }
+
+  void TrajectoryManager::StoreControlPointCovariances(
+      const ControlPointCovarianceResult &covariance)
+  {
+    if (!covariance.success)
+      return;
+    for (const ControlPointCovariance &control_point :
+         covariance.control_points)
+    {
+      stored_control_point_covariances_[control_point.knot_index] =
+          control_point;
+    }
   }
 
   void TrajectoryManager::CaptureCoarseControlPoints()
@@ -184,10 +457,15 @@ namespace cocolic
       int prior_factor_count,
       double optimization_time_ms)
   {
-    if (cp_uncertainty_output_dir_.empty())
+    const bool covariance_required =
+        !cp_uncertainty_output_dir_.empty() ||
+        predictor_mode_ == ControlPointPredictorMode::GaussianProcess ||
+        continuation_factor_mode_ == ContinuationFactorMode::Adaptive;
+    if (!covariance_required)
       return;
 
-    const size_t window_index = cp_uncertainty_window_index_++;
+    const bool write_diagnostics = !cp_uncertainty_output_dir_.empty();
+    const size_t window_index = cp_uncertainty_window_index_;
     const double data_start_time_s =
         trajectory_->GetDataStartTime() * NS_TO_S;
     const double window_start_time_s =
@@ -195,7 +473,7 @@ namespace cocolic
     const double window_end_time_s =
         data_start_time_s + opt_max_t_ns * NS_TO_S;
     std::vector<int64_t> trajectory_times_ns;
-    if (cp_uncertainty_has_query_times_)
+    if (write_diagnostics && cp_uncertainty_has_query_times_)
     {
       while (cp_uncertainty_query_index_ <
              cp_uncertainty_query_times_s_.size())
@@ -211,13 +489,18 @@ namespace cocolic
           trajectory_times_ns.push_back(query_time_ns);
       }
     }
-    else
+    else if (write_diagnostics)
     {
       trajectory_times_ns.push_back(opt_max_t_ns - 1);
     }
 
     ControlPointCovarianceResult covariance =
         estimator.ComputeControlPointCovariances(trajectory_times_ns);
+    StoreControlPointCovariances(covariance);
+    if (!write_diagnostics)
+      return;
+
+    ++cp_uncertainty_window_index_;
     const size_t successful_trajectory_queries = std::count_if(
         covariance.trajectory_queries.begin(),
         covariance.trajectory_queries.end(),
@@ -236,7 +519,14 @@ namespace cocolic
         << iterations << ',' << summary.num_successful_steps << ','
         << summary.num_unsuccessful_steps << ',' << optimization_time_ms << ','
         << lidar_factor_count << ',' << imu_factor_count << ','
-        << camera_factor_count << ',' << prior_factor_count << ",1\n";
+        << camera_factor_count << ',' << prior_factor_count << ",1,"
+        << coarse_initial_cost_ << ',' << coarse_final_cost_ << ','
+        << coarse_iterations_ << ',' << coarse_optimization_time_ms_ << ','
+        << continuation_prediction_time_ms_ << ','
+        << (continuation_factor_mode_ == ContinuationFactorMode::None
+                ? 0
+                : continuation_priors_.size())
+        << '\n';
 
     for (const TrajectoryCovariance &trajectory_query :
          covariance.trajectory_queries)
@@ -470,7 +760,9 @@ namespace cocolic
     trajectory_->SetMaxTimeNsNURBS(traj_max_time_ns);
     opt_max_t_ns = trajectory_->maxTimeNsNURBS();
     SE3d last_knot = trajectory_->getLastKnot();
+    const size_t first_new_knot = trajectory_->numKnots();
     trajectory_->extendKnotsTo(knot_add_num, last_knot);
+    BuildKnotContinuationPriors(first_new_knot, knot_add_num);
 
     ////// color control point for visualization
     int intensity = 0;
@@ -545,7 +837,13 @@ namespace cocolic
                                                 opt_weight_.imu_info_vec);
     }
 
+    TicToc coarse_timer;
     ceres::Solver::Summary summary = estimator->Solve(50, false);
+    coarse_optimization_time_ms_ = coarse_timer.toc();
+    coarse_initial_cost_ = summary.initial_cost;
+    coarse_final_cost_ = summary.final_cost;
+    coarse_iterations_ =
+        summary.num_successful_steps + summary.num_unsuccessful_steps;
     CaptureCoarseControlPoints();
     static int init_cnt = 0;
     init_cnt++;
@@ -600,6 +898,7 @@ namespace cocolic
     int lidar_factor_count = 0;
     int imu_factor_count = 0;
     int camera_factor_count = 0;
+    int continuation_factor_count = 0;
 
     estimator->SetFixedIndex(3);
 
@@ -700,6 +999,43 @@ namespace cocolic
     else
     {
       process_cur_img_ = false;
+    }
+
+    if (continuation_factor_mode_ != ContinuationFactorMode::None)
+    {
+      const Eigen::Matrix3d position_process_covariance =
+          position_process_std_m_ * position_process_std_m_ *
+          Eigen::Matrix3d::Identity();
+      const Eigen::Matrix3d rotation_process_covariance =
+          rotation_process_std_rad_ * rotation_process_std_rad_ *
+          Eigen::Matrix3d::Identity();
+      for (const KnotContinuationPrior &prior : continuation_priors_)
+      {
+        Eigen::Matrix3d position_covariance = position_process_covariance;
+        Eigen::Matrix3d rotation_covariance = rotation_process_covariance;
+        if (continuation_factor_mode_ == ContinuationFactorMode::Adaptive)
+        {
+          position_covariance += prior.position_covariance;
+          rotation_covariance += prior.rotation_covariance;
+        }
+
+        Eigen::LLT<Eigen::Matrix3d> position_llt(position_covariance);
+        Eigen::LLT<Eigen::Matrix3d> rotation_llt(rotation_covariance);
+        if (position_llt.info() != Eigen::Success ||
+            rotation_llt.info() != Eigen::Success)
+        {
+          throw std::runtime_error("Invalid continuation covariance");
+        }
+        const Eigen::Matrix3d position_sqrt_info =
+            position_llt.matrixL().solve(Eigen::Matrix3d::Identity());
+        const Eigen::Matrix3d rotation_sqrt_info =
+            rotation_llt.matrixL().solve(Eigen::Matrix3d::Identity());
+        estimator->AddControlPointPrior(
+            prior.knot_index, prior.rotation_mean, prior.position_mean,
+            rotation_sqrt_info, position_sqrt_info);
+        ++continuation_factor_count;
+      }
+      prior_factor_count += continuation_factor_count;
     }
 
     TicToc t_opt;

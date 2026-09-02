@@ -122,6 +122,32 @@ namespace cocolic
                           cp_uncertainty_query_times_path, "");
     trajectory_manager_->ConfigureControlPointDiagnostics(
         cp_uncertainty_output_dir, cp_uncertainty_query_times_path);
+    std::string cp_predictor_mode;
+    std::string cp_continuation_factor_mode;
+    int cp_gp_history_size;
+    double cp_gp_length_scale_s;
+    double cp_position_covariance_scale;
+    double cp_rotation_covariance_scale;
+    double cp_position_process_std_m;
+    double cp_rotation_process_std_rad;
+    nh.param<std::string>("cp_predictor_mode", cp_predictor_mode, "copy");
+    nh.param<std::string>("cp_continuation_factor_mode",
+                          cp_continuation_factor_mode, "none");
+    nh.param<int>("cp_gp_history_size", cp_gp_history_size, 6);
+    nh.param<double>("cp_gp_length_scale_s", cp_gp_length_scale_s, 0.3);
+    nh.param<double>("cp_position_covariance_scale",
+                     cp_position_covariance_scale, 40000.0);
+    nh.param<double>("cp_rotation_covariance_scale",
+                     cp_rotation_covariance_scale, 10000.0);
+    nh.param<double>("cp_position_process_std_m",
+                     cp_position_process_std_m, 0.05);
+    nh.param<double>("cp_rotation_process_std_rad",
+                     cp_rotation_process_std_rad, 0.02);
+    trajectory_manager_->ConfigureProbabilisticContinuation(
+        cp_predictor_mode, cp_continuation_factor_mode, cp_gp_history_size,
+        cp_gp_length_scale_s, cp_position_covariance_scale,
+        cp_rotation_covariance_scale, cp_position_process_std_m,
+        cp_rotation_process_std_rad);
 
     int division_coarse = node["division_coarse"].as<int>();
     cp_add_num_coarse_ = division_coarse;
