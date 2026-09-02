@@ -122,6 +122,11 @@ namespace cocolic
                           cp_uncertainty_query_times_path, "");
     trajectory_manager_->ConfigureControlPointDiagnostics(
         cp_uncertainty_output_dir, cp_uncertainty_query_times_path);
+    std::string observability_output_dir;
+    nh.param<std::string>("observability_output_dir",
+                          observability_output_dir, "");
+    trajectory_manager_->ConfigureObservabilityDiagnostics(
+        observability_output_dir);
 
     int division_coarse = node["division_coarse"].as<int>();
     cp_add_num_coarse_ = division_coarse;

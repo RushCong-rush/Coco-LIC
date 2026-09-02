@@ -77,6 +77,7 @@ namespace cocolic
 
     // for debug
     bool show_residual_summary = false;
+    bool collect_observability_diagnostics = false;
   };
 
 } // namespace cocolic

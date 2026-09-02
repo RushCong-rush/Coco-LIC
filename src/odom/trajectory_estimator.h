@@ -28,6 +28,8 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 
+#include <limits>
+
 #include "opt_param.h"
 #include "trajectory_estimator_options.h"
 
@@ -68,6 +70,41 @@ namespace cocolic
     double computation_time_ms = 0.0;
     Eigen::aligned_vector<ControlPointCovariance> control_points;
     Eigen::aligned_vector<TrajectoryCovariance> trajectory_queries;
+  };
+
+  struct ObservabilitySpectrum
+  {
+    int dimension = 0;
+    int effective_rank = 0;
+    double rank_fraction = 0.0;
+    double min_eigenvalue = 0.0;
+    double weakest_observable_eigenvalue = 0.0;
+    double median_eigenvalue = 0.0;
+    double max_eigenvalue = 0.0;
+    double condition_number = std::numeric_limits<double>::infinity();
+  };
+
+  struct SensorObservability
+  {
+    bool success = false;
+    int factor_blocks = 0;
+    int residual_count = 0;
+    int parameter_dimension = 0;
+    double residual_rms = std::numeric_limits<double>::quiet_NaN();
+    double raw_residual_rms = std::numeric_limits<double>::quiet_NaN();
+    double robust_influence_mean = std::numeric_limits<double>::quiet_NaN();
+    double evaluation_time_ms = 0.0;
+    ObservabilitySpectrum joint;
+    ObservabilitySpectrum rotation;
+    ObservabilitySpectrum position;
+  };
+
+  struct CausalObservabilityDiagnostics
+  {
+    bool success = false;
+    double computation_time_ms = 0.0;
+    SensorObservability lidar;
+    SensorObservability camera;
   };
 
   struct ResidualSummary
@@ -334,6 +371,8 @@ namespace cocolic
     ControlPointCovarianceResult ComputeControlPointCovariances(
         const std::vector<int64_t> &trajectory_times_ns);
 
+    CausalObservabilityDiagnostics ComputeCausalObservabilityDiagnostics();
+
     void PrepareMarginalizationInfo(ResidualType r_type,
                                     ceres::CostFunction *cost_function,
                                     ceres::LossFunction *loss_function,
@@ -394,6 +433,15 @@ namespace cocolic
 
     // for debug
     ResidualSummary residual_summary_;
+
+    SensorObservability ComputeSensorObservability(
+        const std::vector<ceres::ResidualBlockId> &residual_blocks,
+        int residual_dimension, double robust_loss_scale) const;
+    static ObservabilitySpectrum ComputeObservabilitySpectrum(
+        const Eigen::MatrixXd &information);
+
+    std::vector<ceres::ResidualBlockId> lidar_residual_blocks_;
+    std::vector<ceres::ResidualBlockId> camera_residual_blocks_;
 
     bool callback_needs_state_;
     std::vector<std::unique_ptr<ceres::IterationCallback>> callbacks_;

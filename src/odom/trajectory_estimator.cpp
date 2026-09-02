@@ -21,6 +21,8 @@
 #include <ceres/covariance.h>
 #include <ceres/dynamic_cost_function.h>
 
+#include <Eigen/Eigenvalues>
+
 #include <odom/trajectory_estimator.h>
 #include <odom/factor/analytic_diff/rd_spline_view.h>
 #include <odom/factor/analytic_diff/so3_spline_view.h>
@@ -30,10 +32,16 @@
 #include <chrono>
 #include <memory>
 #include <thread>
+#include <unordered_set>
 #include <variant>
 
 namespace cocolic
 {
+  namespace
+  {
+    constexpr double kPnpCauchyLossScale = 10.0;
+  }
+
 
   using namespace opt_param;
 
@@ -247,7 +255,10 @@ namespace cocolic
     AddControlPointsNURBS(su.first - 3, vec, true);
 
     ceres::LossFunction *loss_function = NULL;
-    problem_->AddResidualBlock(cost_function, loss_function, vec);
+    ceres::ResidualBlockId residual_block =
+        problem_->AddResidualBlock(cost_function, loss_function, vec);
+    if (options.collect_observability_diagnostics)
+      lidar_residual_blocks_.push_back(residual_block);
   }
 
   void TrajectoryEstimator::AddPnPMeasurementAnalyticNURBS(const Eigen::Vector3d &visual_map_point,
@@ -276,8 +287,11 @@ namespace cocolic
     AddControlPointsNURBS(su.first - 3, vec, true);
 
     ceres::LossFunction *loss_function = NULL;
-    loss_function = new ceres::CauchyLoss(10.0); // adopt from vins-mono  //[default: 10.0]
-    problem_->AddResidualBlock(cost_function, loss_function, vec);
+    loss_function = new ceres::CauchyLoss(kPnpCauchyLossScale); // adopt from vins-mono
+    ceres::ResidualBlockId residual_block =
+        problem_->AddResidualBlock(cost_function, loss_function, vec);
+    if (options.collect_observability_diagnostics)
+      camera_residual_blocks_.push_back(residual_block);
   }
 
   void TrajectoryEstimator::AddPhotometricMeasurementAnalyticNURBS(
@@ -520,6 +534,181 @@ namespace cocolic
     }
 
     return summary;
+  }
+
+  ObservabilitySpectrum TrajectoryEstimator::ComputeObservabilitySpectrum(
+      const Eigen::MatrixXd &information)
+  {
+    ObservabilitySpectrum result;
+    result.dimension = information.rows();
+    if (information.rows() == 0 || information.cols() != information.rows() ||
+        !information.allFinite())
+      return result;
+
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(information);
+    if (solver.info() != Eigen::Success)
+      return result;
+
+    Eigen::VectorXd eigenvalues = solver.eigenvalues().cwiseMax(0.0);
+    result.min_eigenvalue = eigenvalues[0];
+    result.max_eigenvalue = eigenvalues[eigenvalues.size() - 1];
+    const int middle = eigenvalues.size() / 2;
+    result.median_eigenvalue = eigenvalues.size() % 2 == 0
+                                   ? 0.5 * (eigenvalues[middle - 1] +
+                                            eigenvalues[middle])
+                                   : eigenvalues[middle];
+
+    if (result.max_eigenvalue > 0.0)
+    {
+      const double rank_threshold = result.max_eigenvalue * 1e-6;
+      result.effective_rank =
+          (eigenvalues.array() > rank_threshold).count();
+      result.rank_fraction = static_cast<double>(result.effective_rank) /
+                             result.dimension;
+      if (result.effective_rank > 0)
+      {
+        result.weakest_observable_eigenvalue =
+            eigenvalues[result.dimension - result.effective_rank];
+        result.condition_number = result.max_eigenvalue /
+            result.weakest_observable_eigenvalue;
+      }
+    }
+    return result;
+  }
+
+  SensorObservability TrajectoryEstimator::ComputeSensorObservability(
+      const std::vector<ceres::ResidualBlockId> &residual_blocks,
+      int residual_dimension, double robust_loss_scale) const
+  {
+    SensorObservability result;
+    result.factor_blocks = residual_blocks.size();
+    if (residual_blocks.empty())
+      return result;
+
+    const auto start = std::chrono::steady_clock::now();
+    std::unordered_set<double *> dependent_blocks;
+    for (ceres::ResidualBlockId residual_block : residual_blocks)
+    {
+      std::vector<double *> parameter_blocks;
+      problem_->GetParameterBlocksForResidualBlock(residual_block,
+                                                    &parameter_blocks);
+      dependent_blocks.insert(parameter_blocks.begin(), parameter_blocks.end());
+    }
+
+    ceres::Problem::EvaluateOptions options;
+    options.apply_loss_function = true;
+    options.num_threads = 1;
+    options.residual_blocks = residual_blocks;
+
+    int rotation_dimension = 0;
+    for (size_t i = 0; i < trajectory_->numKnots(); ++i)
+    {
+      double *rotation = trajectory_->getKnotSO3(i).data();
+      if (dependent_blocks.count(rotation) &&
+          !problem_->IsParameterBlockConstant(rotation))
+      {
+        options.parameter_blocks.push_back(rotation);
+        rotation_dimension += problem_->ParameterBlockLocalSize(rotation);
+      }
+    }
+    for (size_t i = 0; i < trajectory_->numKnots(); ++i)
+    {
+      double *position = trajectory_->getKnotPos(i).data();
+      if (dependent_blocks.count(position) &&
+          !problem_->IsParameterBlockConstant(position))
+        options.parameter_blocks.push_back(position);
+    }
+    if (options.parameter_blocks.empty())
+      return result;
+
+    double cost = 0.0;
+    ceres::CRSMatrix sparse_jacobian;
+    result.success = problem_->Evaluate(options, &cost, nullptr, nullptr,
+                                        &sparse_jacobian);
+    result.residual_count = sparse_jacobian.num_rows;
+    result.parameter_dimension = sparse_jacobian.num_cols;
+    if (!result.success || result.residual_count == 0 ||
+        result.parameter_dimension == 0)
+      return result;
+
+    result.residual_rms =
+        std::sqrt(std::max(0.0, 2.0 * cost / result.residual_count));
+
+    options.apply_loss_function = false;
+    double raw_cost = 0.0;
+    std::vector<double> raw_residuals;
+    if (problem_->Evaluate(options, &raw_cost, &raw_residuals, nullptr,
+                           nullptr))
+    {
+      result.raw_residual_rms = std::sqrt(
+          std::max(0.0, 2.0 * raw_cost / result.residual_count));
+      if (robust_loss_scale > 0.0 && residual_dimension > 0 &&
+          raw_residuals.size() % residual_dimension == 0)
+      {
+        const double scale_squared = robust_loss_scale * robust_loss_scale;
+        double influence_sum = 0.0;
+        const size_t block_count = raw_residuals.size() / residual_dimension;
+        for (size_t block = 0; block < block_count; ++block)
+        {
+          double squared_norm = 0.0;
+          for (int component = 0; component < residual_dimension; ++component)
+          {
+            const double value =
+                raw_residuals[block * residual_dimension + component];
+            squared_norm += value * value;
+          }
+          influence_sum += 1.0 / (1.0 + squared_norm / scale_squared);
+        }
+        result.robust_influence_mean = influence_sum / block_count;
+      }
+    }
+    Eigen::MatrixXd jacobian = Eigen::MatrixXd::Zero(
+        sparse_jacobian.num_rows, sparse_jacobian.num_cols);
+    for (int row = 0; row < sparse_jacobian.num_rows; ++row)
+    {
+      for (int entry = sparse_jacobian.rows[row];
+           entry < sparse_jacobian.rows[row + 1]; ++entry)
+      {
+        jacobian(row, sparse_jacobian.cols[entry]) =
+            sparse_jacobian.values[entry];
+      }
+    }
+    const Eigen::MatrixXd information =
+        jacobian.transpose() * jacobian / result.residual_count;
+    result.joint = ComputeObservabilitySpectrum(information);
+    if (rotation_dimension > 0)
+    {
+      result.rotation = ComputeObservabilitySpectrum(
+          information.topLeftCorner(rotation_dimension, rotation_dimension));
+    }
+    const int position_dimension = result.parameter_dimension - rotation_dimension;
+    if (position_dimension > 0)
+    {
+      result.position = ComputeObservabilitySpectrum(
+          information.bottomRightCorner(position_dimension,
+                                        position_dimension));
+    }
+
+    result.evaluation_time_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count();
+    return result;
+  }
+
+  CausalObservabilityDiagnostics
+  TrajectoryEstimator::ComputeCausalObservabilityDiagnostics()
+  {
+    CausalObservabilityDiagnostics result;
+    const auto start = std::chrono::steady_clock::now();
+    result.lidar = ComputeSensorObservability(
+        lidar_residual_blocks_, 1, 0.0);
+    result.camera = ComputeSensorObservability(
+        camera_residual_blocks_, 2, kPnpCauchyLossScale);
+    result.success = result.lidar.success || result.camera.success;
+    result.computation_time_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count();
+    return result;
   }
 
   ControlPointCovarianceResult

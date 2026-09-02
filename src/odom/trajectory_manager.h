@@ -163,6 +163,8 @@ namespace cocolic
         const std::string &output_dir,
         const std::string &query_times_path = "");
 
+    void ConfigureObservabilityDiagnostics(const std::string &output_dir);
+
     void UpdateLiDARAttribute(double scan_time_min, double scan_time_max);
 
     void Log(std::string descri) const;
@@ -260,6 +262,22 @@ namespace cocolic
         int prior_factor_count,
         double optimization_time_ms);
 
+    struct ImuExcitation
+    {
+      int samples = 0;
+      double gyro_rms = 0.0;
+      double gyro_std = 0.0;
+      double accel_norm_error = 0.0;
+      double accel_std = 0.0;
+    };
+
+    ImuExcitation ComputeImuExcitation(const Eigen::Vector3d &gyro_bias,
+                                       const Eigen::Vector3d &accel_bias) const;
+
+    void WriteObservabilityDiagnostics(
+        const ceres::Solver::Summary &summary,
+        double optimization_time_ms);
+
     TrajectoryDynamicsState EvaluateTrajectoryDynamics(int64_t time_ns);
 
     void WriteTrajectoryDynamicsDiagnostics(
@@ -336,6 +354,13 @@ namespace cocolic
     Eigen::aligned_vector<Eigen::Vector3d> coarse_positions_;
     Eigen::aligned_vector<SO3d> coarse_rotations_;
     TrajectoryDynamicsState previous_window_end_dynamics_;
+
+    std::string observability_output_dir_;
+    std::ofstream observability_stream_;
+    size_t observability_window_index_ = 0;
+    CausalObservabilityDiagnostics pending_observability_;
+    ImuExcitation pending_imu_excitation_;
+    bool pending_observability_valid_ = false;
 
   public:
     void ClearVisual()

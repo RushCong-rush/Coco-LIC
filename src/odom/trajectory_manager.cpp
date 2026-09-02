@@ -188,6 +188,60 @@ namespace cocolic
            "lidar_factors,imu_factors,camera_factors,prior_factors,bias_factors\n";
   }
 
+  void TrajectoryManager::ConfigureObservabilityDiagnostics(
+      const std::string &output_dir)
+  {
+    if (output_dir.empty())
+      return;
+
+    boost::filesystem::create_directories(output_dir);
+    observability_stream_.open(output_dir + "/observability_windows.csv",
+                               std::ios::out | std::ios::trunc);
+    if (!observability_stream_)
+    {
+      LOG(ERROR) << "Cannot open observability diagnostic output: "
+                 << output_dir;
+      return;
+    }
+
+    observability_output_dir_ = output_dir;
+    observability_stream_ << std::setprecision(17)
+                          << "window_index,window_start_time_s,"
+                             "window_end_time_s,diagnostic_success,"
+                             "diagnostic_time_ms,";
+    const auto write_sensor_header = [this](const std::string &prefix) {
+      observability_stream_
+          << prefix << "_success," << prefix << "_factor_blocks,"
+          << prefix << "_residual_count," << prefix << "_parameter_dimension,"
+          << prefix << "_residual_rms," << prefix << "_raw_residual_rms,"
+          << prefix << "_robust_influence_mean,"
+          << prefix << "_evaluation_time_ms,"
+          << prefix << "_joint_rank_fraction," << prefix << "_joint_eig_min,"
+          << prefix << "_joint_eig_weakest_observable,"
+          << prefix << "_joint_eig_median," << prefix << "_joint_eig_max,"
+          << prefix << "_joint_condition," << prefix << "_rotation_rank_fraction,"
+          << prefix << "_rotation_eig_min,"
+          << prefix << "_rotation_eig_weakest_observable,"
+          << prefix << "_rotation_eig_median,"
+          << prefix << "_rotation_eig_max," << prefix << "_rotation_condition,"
+          << prefix << "_position_rank_fraction," << prefix << "_position_eig_min,"
+          << prefix << "_position_eig_weakest_observable,"
+          << prefix << "_position_eig_median," << prefix << "_position_eig_max,"
+          << prefix << "_position_condition,";
+    };
+    write_sensor_header("lidar");
+    write_sensor_header("camera");
+    observability_stream_
+        << "imu_samples,imu_gyro_rms,imu_gyro_std,"
+           "imu_accel_norm_error,imu_accel_std,"
+           "coarse_to_fine_position_median,"
+           "coarse_to_fine_position_max,"
+           "coarse_to_fine_rotation_median,"
+           "coarse_to_fine_rotation_max,solution_usable,"
+           "initial_cost,final_cost,iterations,successful_steps,"
+           "unsuccessful_steps,optimization_time_ms\n";
+  }
+
   TrajectoryManager::TrajectoryDynamicsState
   TrajectoryManager::EvaluateTrajectoryDynamics(int64_t time_ns)
   {
@@ -290,7 +344,8 @@ namespace cocolic
 
   void TrajectoryManager::CaptureCoarseControlPoints()
   {
-    if (cp_uncertainty_output_dir_.empty())
+    if (cp_uncertainty_output_dir_.empty() &&
+        observability_output_dir_.empty())
       return;
 
     coarse_positions_.clear();
@@ -302,6 +357,139 @@ namespace cocolic
       coarse_positions_.push_back(trajectory_->getKnotPos(i));
       coarse_rotations_.push_back(trajectory_->getKnotSO3(i));
     }
+  }
+
+  TrajectoryManager::ImuExcitation TrajectoryManager::ComputeImuExcitation(
+      const Eigen::Vector3d &gyro_bias,
+      const Eigen::Vector3d &accel_bias) const
+  {
+    ImuExcitation result;
+    const int begin = std::max(0, tparam_.lio_imu_idx[0]);
+    const int end = std::min(static_cast<int>(imu_data_.size()),
+                             tparam_.lio_imu_idx[1]);
+    if (begin >= end)
+      return result;
+
+    Eigen::Vector3d gyro_mean = Eigen::Vector3d::Zero();
+    Eigen::Vector3d accel_mean = Eigen::Vector3d::Zero();
+    double gyro_squared_sum = 0.0;
+    for (int i = begin; i < end; ++i)
+    {
+      const Eigen::Vector3d gyro = imu_data_[i].gyro - gyro_bias;
+      const Eigen::Vector3d accel = imu_data_[i].accel - accel_bias;
+      gyro_mean += gyro;
+      accel_mean += accel;
+      gyro_squared_sum += gyro.squaredNorm();
+      ++result.samples;
+    }
+    gyro_mean /= result.samples;
+    accel_mean /= result.samples;
+
+    double gyro_variance = 0.0;
+    double accel_variance = 0.0;
+    for (int i = begin; i < end; ++i)
+    {
+      const Eigen::Vector3d gyro = imu_data_[i].gyro - gyro_bias;
+      const Eigen::Vector3d accel = imu_data_[i].accel - accel_bias;
+      gyro_variance += (gyro - gyro_mean).squaredNorm();
+      accel_variance += (accel - accel_mean).squaredNorm();
+    }
+    result.gyro_rms = std::sqrt(gyro_squared_sum / result.samples);
+    result.gyro_std = std::sqrt(gyro_variance / result.samples);
+    result.accel_norm_error =
+        std::abs(accel_mean.norm() - gravity_.norm());
+    result.accel_std = std::sqrt(accel_variance / result.samples);
+    return result;
+  }
+
+  void TrajectoryManager::WriteObservabilityDiagnostics(
+      const ceres::Solver::Summary &summary,
+      double optimization_time_ms)
+  {
+    if (!pending_observability_valid_ || !observability_stream_)
+      return;
+
+    const double data_start_time_s =
+        trajectory_->GetDataStartTime() * NS_TO_S;
+    const double window_start_time_s =
+        data_start_time_s + opt_min_t_ns * NS_TO_S;
+    const double window_end_time_s =
+        data_start_time_s + opt_max_t_ns * NS_TO_S;
+
+    std::vector<double> position_corrections;
+    std::vector<double> rotation_corrections;
+    const size_t active_count = std::min(
+        trajectory_->numKnots(), static_cast<size_t>(std::max(0, division_) + 3));
+    const size_t first_active = trajectory_->numKnots() - active_count;
+    for (size_t i = first_active; i < trajectory_->numKnots(); ++i)
+    {
+      if (i >= coarse_positions_.size() || i >= coarse_rotations_.size())
+        continue;
+      position_corrections.push_back(
+          (trajectory_->getKnotPos(i) - coarse_positions_[i]).norm());
+      rotation_corrections.push_back(
+          (coarse_rotations_[i].inverse() * trajectory_->getKnotSO3(i))
+              .log().norm());
+    }
+    const auto median = [](std::vector<double> values) {
+      if (values.empty())
+        return std::numeric_limits<double>::quiet_NaN();
+      std::sort(values.begin(), values.end());
+      const size_t middle = values.size() / 2;
+      return values.size() % 2 == 0
+                 ? 0.5 * (values[middle - 1] + values[middle])
+                 : values[middle];
+    };
+    const auto maximum = [](const std::vector<double> &values) {
+      return values.empty()
+                 ? std::numeric_limits<double>::quiet_NaN()
+                 : *std::max_element(values.begin(), values.end());
+    };
+
+    observability_stream_
+        << observability_window_index_++ << ',' << window_start_time_s << ','
+        << window_end_time_s << ',' << pending_observability_.success << ','
+        << pending_observability_.computation_time_ms << ',';
+    const auto write_spectrum = [this](const ObservabilitySpectrum &spectrum) {
+      observability_stream_
+          << spectrum.rank_fraction << ',' << spectrum.min_eigenvalue << ','
+          << spectrum.weakest_observable_eigenvalue << ','
+          << spectrum.median_eigenvalue << ',' << spectrum.max_eigenvalue << ','
+          << spectrum.condition_number << ',';
+    };
+    const auto write_sensor = [this, &write_spectrum](
+                                  const SensorObservability &sensor) {
+      observability_stream_
+          << sensor.success << ',' << sensor.factor_blocks << ','
+          << sensor.residual_count << ',' << sensor.parameter_dimension << ','
+          << sensor.residual_rms << ',' << sensor.raw_residual_rms << ','
+          << sensor.robust_influence_mean << ','
+          << sensor.evaluation_time_ms << ',';
+      write_spectrum(sensor.joint);
+      write_spectrum(sensor.rotation);
+      write_spectrum(sensor.position);
+    };
+    write_sensor(pending_observability_.lidar);
+    write_sensor(pending_observability_.camera);
+
+    const int iterations =
+        summary.num_successful_steps + summary.num_unsuccessful_steps;
+    observability_stream_
+        << pending_imu_excitation_.samples << ','
+        << pending_imu_excitation_.gyro_rms << ','
+        << pending_imu_excitation_.gyro_std << ','
+        << pending_imu_excitation_.accel_norm_error << ','
+        << pending_imu_excitation_.accel_std << ','
+        << median(position_corrections) << ','
+        << maximum(position_corrections) << ','
+        << median(rotation_corrections) << ','
+        << maximum(rotation_corrections) << ','
+        << summary.IsSolutionUsable() << ',' << summary.initial_cost << ','
+        << summary.final_cost << ',' << iterations << ','
+        << summary.num_successful_steps << ','
+        << summary.num_unsuccessful_steps << ',' << optimization_time_ms << '\n';
+    observability_stream_.flush();
+    pending_observability_valid_ = false;
   }
 
   void TrajectoryManager::WriteControlPointDiagnostics(
@@ -724,6 +912,10 @@ namespace cocolic
     option.lock_wb = false;
     option.lock_g = true;
     option.show_residual_summary = verbose;
+    option.collect_observability_diagnostics =
+        lidar_iter == 0 && !observability_output_dir_.empty();
+    if (lidar_iter == 0)
+      pending_observability_valid_ = false;
     TrajectoryEstimator::Ptr estimator(
         new TrajectoryEstimator(trajectory_, option, "Before LIO"));
 
@@ -833,6 +1025,16 @@ namespace cocolic
       process_cur_img_ = false;
     }
 
+    if (option.collect_observability_diagnostics)
+    {
+      pending_observability_ =
+          estimator->ComputeCausalObservabilityDiagnostics();
+      pending_imu_excitation_ = ComputeImuExcitation(
+          Eigen::Map<Eigen::Vector3d>(para_bg_vec[0]),
+          Eigen::Map<Eigen::Vector3d>(para_ba_vec[0]));
+      pending_observability_valid_ = pending_observability_.success;
+    }
+
     TicToc t_opt;
     static int loam_cnt = 0;
     ceres::Solver::Summary summary = estimator->Solve(iteration, false);
@@ -851,6 +1053,7 @@ namespace cocolic
       WriteControlPointDiagnostics(*estimator, summary, lidar_factor_count,
                                    imu_factor_count, camera_factor_count,
                                    prior_factor_count, opt_time);
+      WriteObservabilityDiagnostics(summary, opt_time);
     }
 
     // LOG(INFO) << "[gyro_bias_new] " << all_imu_bias_.rbegin()->second.gyro_bias.x() << " "
