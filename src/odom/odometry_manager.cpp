@@ -134,6 +134,7 @@ namespace cocolic
 
     // gaussian-lic
     if_3dgs_ = node["if_3dgs"].as<bool>();
+    nh.param<bool>("if_3dgs", if_3dgs_, if_3dgs_);
     lidar_skip_ = node["lidar_skip"].as<int>();
     lidarpoints.clear();
 
