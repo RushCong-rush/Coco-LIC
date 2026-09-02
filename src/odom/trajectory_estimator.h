@@ -39,6 +39,37 @@
 namespace cocolic
 {
 
+  struct ControlPointCovariance
+  {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    size_t knot_index = 0;
+    Eigen::Matrix3d position = Eigen::Matrix3d::Zero();
+    Eigen::Matrix3d rotation = Eigen::Matrix3d::Zero();
+  };
+
+  struct TrajectoryCovariance
+  {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    bool success = false;
+    int64_t time_ns = 0;
+    Eigen::Vector3d position = Eigen::Vector3d::Zero();
+    Eigen::Quaterniond rotation = Eigen::Quaterniond::Identity();
+    Eigen::Matrix3d position_covariance = Eigen::Matrix3d::Zero();
+    Eigen::Matrix3d rotation_covariance = Eigen::Matrix3d::Zero();
+  };
+
+  struct ControlPointCovarianceResult
+  {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    bool success = false;
+    double computation_time_ms = 0.0;
+    Eigen::aligned_vector<ControlPointCovariance> control_points;
+    Eigen::aligned_vector<TrajectoryCovariance> trajectory_queries;
+  };
+
   struct ResidualSummary
   {
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -299,6 +330,9 @@ namespace cocolic
 
     ceres::Solver::Summary Solve(int max_iterations = 50, bool progress = false,
                                  int num_threads = -1);
+
+    ControlPointCovarianceResult ComputeControlPointCovariances(
+        const std::vector<int64_t> &trajectory_times_ns);
 
     void PrepareMarginalizationInfo(ResidualType r_type,
                                     ceres::CostFunction *cost_function,

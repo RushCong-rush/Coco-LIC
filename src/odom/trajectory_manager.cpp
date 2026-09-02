@@ -22,7 +22,13 @@
 #include <ros/assert.h>
 #include <utils/log_utils.h>
 
+#include <boost/filesystem.hpp>
+#include <algorithm>
+#include <cmath>
 #include <fstream>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 std::fstream myfile_t_ba;
 namespace cocolic
 {
@@ -58,6 +64,239 @@ namespace cocolic
 
     v_points_.clear();
     px_obss_.clear();
+  }
+
+  void TrajectoryManager::ConfigureControlPointDiagnostics(
+      const std::string &output_dir,
+      const std::string &query_times_path)
+  {
+    if (output_dir.empty())
+      return;
+
+    cp_uncertainty_query_times_s_.clear();
+    cp_uncertainty_query_index_ = 0;
+    cp_uncertainty_has_query_times_ = !query_times_path.empty();
+    if (cp_uncertainty_has_query_times_)
+    {
+      std::ifstream query_times_stream(query_times_path);
+      if (!query_times_stream)
+      {
+        LOG(ERROR) << "Cannot open control-point diagnostic query times: "
+                   << query_times_path;
+        return;
+      }
+
+      std::string line;
+      while (std::getline(query_times_stream, line))
+      {
+        std::istringstream line_stream(line);
+        double timestamp_s = 0.0;
+        if (line_stream >> timestamp_s && std::isfinite(timestamp_s))
+          cp_uncertainty_query_times_s_.push_back(timestamp_s);
+      }
+      std::sort(cp_uncertainty_query_times_s_.begin(),
+                cp_uncertainty_query_times_s_.end());
+      cp_uncertainty_query_times_s_.erase(
+          std::unique(cp_uncertainty_query_times_s_.begin(),
+                      cp_uncertainty_query_times_s_.end()),
+          cp_uncertainty_query_times_s_.end());
+      if (cp_uncertainty_query_times_s_.empty())
+      {
+        LOG(ERROR) << "No query timestamps in " << query_times_path;
+        return;
+      }
+    }
+
+    boost::filesystem::create_directories(output_dir);
+    cp_covariance_stream_.open(output_dir + "/cp_covariance.csv",
+                               std::ios::out | std::ios::trunc);
+    trajectory_covariance_stream_.open(
+        output_dir + "/trajectory_covariance.csv",
+        std::ios::out | std::ios::trunc);
+    optimization_window_stream_.open(
+        output_dir + "/optimization_windows.csv",
+        std::ios::out | std::ios::trunc);
+    if (!cp_covariance_stream_ || !trajectory_covariance_stream_ ||
+        !optimization_window_stream_)
+    {
+      LOG(ERROR) << "Cannot open control-point diagnostic output: "
+                 << output_dir;
+      cp_covariance_stream_.close();
+      trajectory_covariance_stream_.close();
+      optimization_window_stream_.close();
+      return;
+    }
+
+    cp_uncertainty_output_dir_ = output_dir;
+    cp_covariance_stream_ << std::setprecision(17)
+                          << "window_index,knot_index,knot_time_s,"
+                             "position_x,position_y,position_z,"
+                             "quaternion_x,quaternion_y,quaternion_z,quaternion_w,"
+                             "position_cov_xx,position_cov_xy,position_cov_xz,"
+                             "position_cov_yy,position_cov_yz,position_cov_zz,"
+                             "rotation_cov_xx,rotation_cov_xy,rotation_cov_xz,"
+                             "rotation_cov_yy,rotation_cov_yz,rotation_cov_zz,"
+                             "coarse_to_fine_position_x,coarse_to_fine_position_y,"
+                             "coarse_to_fine_position_z,coarse_to_fine_position_norm,"
+                             "coarse_to_fine_rotation_x,coarse_to_fine_rotation_y,"
+                             "coarse_to_fine_rotation_z,coarse_to_fine_rotation_norm\n";
+    trajectory_covariance_stream_
+        << std::setprecision(17)
+        << "window_index,query_time_s,position_x,position_y,position_z,"
+           "quaternion_x,quaternion_y,quaternion_z,quaternion_w,"
+           "position_cov_xx,position_cov_xy,position_cov_xz,"
+           "position_cov_yy,position_cov_yz,position_cov_zz,"
+           "rotation_cov_xx,rotation_cov_xy,rotation_cov_xz,"
+           "rotation_cov_yy,rotation_cov_yz,rotation_cov_zz\n";
+    optimization_window_stream_
+        << std::setprecision(17)
+        << "window_index,window_start_time_s,window_end_time_s,"
+           "covariance_success,trajectory_queries,"
+           "trajectory_covariance_successes,"
+           "covariance_control_points,covariance_time_ms,"
+           "solution_usable,initial_cost,final_cost,iterations,"
+           "successful_steps,unsuccessful_steps,optimization_time_ms,"
+           "lidar_factors,imu_factors,camera_factors,prior_factors,bias_factors\n";
+  }
+
+  void TrajectoryManager::CaptureCoarseControlPoints()
+  {
+    if (cp_uncertainty_output_dir_.empty())
+      return;
+
+    coarse_positions_.clear();
+    coarse_rotations_.clear();
+    coarse_positions_.reserve(trajectory_->numKnots());
+    coarse_rotations_.reserve(trajectory_->numKnots());
+    for (size_t i = 0; i < trajectory_->numKnots(); ++i)
+    {
+      coarse_positions_.push_back(trajectory_->getKnotPos(i));
+      coarse_rotations_.push_back(trajectory_->getKnotSO3(i));
+    }
+  }
+
+  void TrajectoryManager::WriteControlPointDiagnostics(
+      TrajectoryEstimator &estimator,
+      const ceres::Solver::Summary &summary,
+      int lidar_factor_count,
+      int imu_factor_count,
+      int camera_factor_count,
+      int prior_factor_count,
+      double optimization_time_ms)
+  {
+    if (cp_uncertainty_output_dir_.empty())
+      return;
+
+    const size_t window_index = cp_uncertainty_window_index_++;
+    const double data_start_time_s =
+        trajectory_->GetDataStartTime() * NS_TO_S;
+    const double window_start_time_s =
+        data_start_time_s + opt_min_t_ns * NS_TO_S;
+    const double window_end_time_s =
+        data_start_time_s + opt_max_t_ns * NS_TO_S;
+    std::vector<int64_t> trajectory_times_ns;
+    if (cp_uncertainty_has_query_times_)
+    {
+      while (cp_uncertainty_query_index_ <
+             cp_uncertainty_query_times_s_.size())
+      {
+        const double query_time_s =
+            cp_uncertainty_query_times_s_[cp_uncertainty_query_index_];
+        const int64_t query_time_ns = static_cast<int64_t>(std::llround(
+            (query_time_s - data_start_time_s) * S_TO_NS));
+        if (query_time_ns >= opt_max_t_ns)
+          break;
+        ++cp_uncertainty_query_index_;
+        if (query_time_ns >= opt_min_t_ns)
+          trajectory_times_ns.push_back(query_time_ns);
+      }
+    }
+    else
+    {
+      trajectory_times_ns.push_back(opt_max_t_ns - 1);
+    }
+
+    ControlPointCovarianceResult covariance =
+        estimator.ComputeControlPointCovariances(trajectory_times_ns);
+    const size_t successful_trajectory_queries = std::count_if(
+        covariance.trajectory_queries.begin(),
+        covariance.trajectory_queries.end(),
+        [](const TrajectoryCovariance &query) { return query.success; });
+    const int iterations =
+        summary.num_successful_steps + summary.num_unsuccessful_steps;
+
+    optimization_window_stream_
+        << window_index << ',' << window_start_time_s << ','
+        << window_end_time_s << ',' << covariance.success << ','
+        << trajectory_times_ns.size() << ','
+        << successful_trajectory_queries << ','
+        << covariance.control_points.size() << ','
+        << covariance.computation_time_ms << ',' << summary.IsSolutionUsable()
+        << ',' << summary.initial_cost << ',' << summary.final_cost << ','
+        << iterations << ',' << summary.num_successful_steps << ','
+        << summary.num_unsuccessful_steps << ',' << optimization_time_ms << ','
+        << lidar_factor_count << ',' << imu_factor_count << ','
+        << camera_factor_count << ',' << prior_factor_count << ",1\n";
+
+    for (const TrajectoryCovariance &trajectory_query :
+         covariance.trajectory_queries)
+    {
+      if (!trajectory_query.success)
+        continue;
+      const Eigen::Quaterniond &q = trajectory_query.rotation;
+      const Eigen::Vector3d &p = trajectory_query.position;
+      const Eigen::Matrix3d &p_cov = trajectory_query.position_covariance;
+      const Eigen::Matrix3d &r_cov = trajectory_query.rotation_covariance;
+      const double query_time_s = data_start_time_s +
+                                  trajectory_query.time_ns * NS_TO_S;
+      trajectory_covariance_stream_
+          << window_index << ',' << query_time_s << ',' << p.x() << ','
+          << p.y() << ',' << p.z() << ',' << q.x() << ',' << q.y() << ','
+          << q.z() << ',' << q.w() << ',' << p_cov(0, 0) << ','
+          << p_cov(0, 1) << ',' << p_cov(0, 2) << ',' << p_cov(1, 1) << ','
+          << p_cov(1, 2) << ',' << p_cov(2, 2) << ',' << r_cov(0, 0) << ','
+          << r_cov(0, 1) << ',' << r_cov(0, 2) << ',' << r_cov(1, 1) << ','
+          << r_cov(1, 2) << ',' << r_cov(2, 2) << '\n';
+    }
+
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    for (const ControlPointCovariance &control_point :
+         covariance.control_points)
+    {
+      const size_t i = control_point.knot_index;
+      const Eigen::Vector3d &position = trajectory_->getKnotPos(i);
+      const SO3d &rotation = trajectory_->getKnotSO3(i);
+      const Eigen::Quaterniond quaternion = rotation.unit_quaternion();
+      Eigen::Vector3d position_correction = Eigen::Vector3d::Constant(nan);
+      Eigen::Vector3d rotation_correction = Eigen::Vector3d::Constant(nan);
+      if (i < coarse_positions_.size() && i < coarse_rotations_.size())
+      {
+        position_correction = position - coarse_positions_[i];
+        rotation_correction = (coarse_rotations_[i].inverse() * rotation).log();
+      }
+      const Eigen::Matrix3d &p_cov = control_point.position;
+      const Eigen::Matrix3d &r_cov = control_point.rotation;
+      const double knot_time_s =
+          data_start_time_s + trajectory_->knts.at(i) * NS_TO_S;
+
+      cp_covariance_stream_
+          << window_index << ',' << i << ',' << knot_time_s << ','
+          << position.x() << ',' << position.y() << ',' << position.z() << ','
+          << quaternion.x() << ',' << quaternion.y() << ',' << quaternion.z()
+          << ',' << quaternion.w() << ',' << p_cov(0, 0) << ','
+          << p_cov(0, 1) << ',' << p_cov(0, 2) << ',' << p_cov(1, 1) << ','
+          << p_cov(1, 2) << ',' << p_cov(2, 2) << ',' << r_cov(0, 0) << ','
+          << r_cov(0, 1) << ',' << r_cov(0, 2) << ',' << r_cov(1, 1) << ','
+          << r_cov(1, 2) << ',' << r_cov(2, 2) << ','
+          << position_correction.x() << ',' << position_correction.y() << ','
+          << position_correction.z() << ',' << position_correction.norm() << ','
+          << rotation_correction.x() << ',' << rotation_correction.y() << ','
+          << rotation_correction.z() << ',' << rotation_correction.norm()
+          << '\n';
+    }
+    optimization_window_stream_.flush();
+    cp_covariance_stream_.flush();
+    trajectory_covariance_stream_.flush();
   }
 
   void TrajectoryManager::InitFactorInfo(
@@ -307,6 +546,7 @@ namespace cocolic
     }
 
     ceres::Solver::Summary summary = estimator->Solve(50, false);
+    CaptureCoarseControlPoints();
     static int init_cnt = 0;
     init_cnt++;
     // LOG(INFO) << init_cnt << " TrajInitSolver " << summary.BriefReport();
@@ -320,7 +560,8 @@ namespace cocolic
       const Eigen::aligned_vector<PointCorrespondence> &point_corrs,
       const Eigen::aligned_vector<Eigen::Vector3d> &pnp_3ds,
       const Eigen::aligned_vector<Eigen::Vector2d> &pnp_2ds,
-      const int iteration)
+      const int iteration,
+      bool final_lidar_iteration)
   {
     if (point_corrs.empty() || imu_data_.empty() || imu_data_.size() == 1)
     {
@@ -355,6 +596,11 @@ namespace cocolic
     TrajectoryEstimator::Ptr estimator(
         new TrajectoryEstimator(trajectory_, option, "Before LIO"));
 
+    int prior_factor_count = 0;
+    int lidar_factor_count = 0;
+    int imu_factor_count = 0;
+    int camera_factor_count = 0;
+
     estimator->SetFixedIndex(3);
 
     // [0] prior factor
@@ -362,6 +608,7 @@ namespace cocolic
     {
       estimator->AddMarginalizationFactor(lidar_marg_info,
                                           lidar_marg_parameter_blocks);
+      prior_factor_count = 1;
     }
 
     // [1] lidar factor
@@ -388,6 +635,7 @@ namespace cocolic
         estimator->AddLoamMeasurementAnalyticNURBS(v, S_GtoM, p_GinM, S_LtoI, p_LinI,
                                                    opt_weight_.lidar_weight);
       }
+      ++lidar_factor_count;
     }
 
     // [2] imu factor
@@ -400,6 +648,7 @@ namespace cocolic
       estimator->AddIMUMeasurementAnalyticNURBS(imu_data_.at(i), para_bg_vec[0],
                                                 para_ba_vec[0], gravity_.data(),
                                                 opt_weight_.imu_info_vec);
+      ++imu_factor_count;
     }
 
     /// [3] bias factor
@@ -445,6 +694,7 @@ namespace cocolic
             trajectory_->GetSensorEP(CameraSensor).so3,
             trajectory_->GetSensorEP(CameraSensor).p,
             *camera_geometry_, opt_weight_.image_weight);
+        ++camera_factor_count;
       }
     }
     else
@@ -464,6 +714,13 @@ namespace cocolic
 
     opt_cnt++;
     t_opt_sum += opt_time;
+
+    if (final_lidar_iteration)
+    {
+      WriteControlPointDiagnostics(*estimator, summary, lidar_factor_count,
+                                   imu_factor_count, camera_factor_count,
+                                   prior_factor_count, opt_time);
+    }
 
     // LOG(INFO) << "[gyro_bias_new] " << all_imu_bias_.rbegin()->second.gyro_bias.x() << " "
     //           << all_imu_bias_.rbegin()->second.gyro_bias.y() << " "

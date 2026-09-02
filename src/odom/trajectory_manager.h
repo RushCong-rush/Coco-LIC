@@ -25,6 +25,8 @@
 #include <odom/factor/analytic_diff/marginalization_factor.h>
 #include <utils/opt_weight.h>
 
+#include <fstream>
+
 namespace cocolic
 {
 
@@ -140,7 +142,12 @@ namespace cocolic
         const Eigen::aligned_vector<PointCorrespondence> &point_corrs,
         const Eigen::aligned_vector<Eigen::Vector3d> &pnp_3ds,
         const Eigen::aligned_vector<Eigen::Vector2d> &pnp_2ds,
-        const int iteration = 50);
+        const int iteration = 50,
+        bool final_lidar_iteration = true);
+
+    void ConfigureControlPointDiagnostics(
+        const std::string &output_dir,
+        const std::string &query_times_path = "");
 
     void UpdateLiDARAttribute(double scan_time_min, double scan_time_max);
 
@@ -228,6 +235,17 @@ namespace cocolic
 
     void InitTrajWithPropagation();
 
+    void CaptureCoarseControlPoints();
+
+    void WriteControlPointDiagnostics(
+        TrajectoryEstimator &estimator,
+        const ceres::Solver::Summary &summary,
+        int lidar_factor_count,
+        int imu_factor_count,
+        int camera_factor_count,
+        int prior_factor_count,
+        double optimization_time_ms);
+
     void TranfromTraj4DoF(double t_min, double t_max, const Eigen::Matrix3d &R0,
                           const Eigen::Vector3d &t0, bool apply = true);
 
@@ -286,6 +304,17 @@ namespace cocolic
 
     Eigen::Matrix3d K_;
     std::shared_ptr<CameraGeometry> camera_geometry_;
+
+    std::string cp_uncertainty_output_dir_;
+    std::ofstream cp_covariance_stream_;
+    std::ofstream trajectory_covariance_stream_;
+    std::ofstream optimization_window_stream_;
+    size_t cp_uncertainty_window_index_ = 0;
+    std::vector<double> cp_uncertainty_query_times_s_;
+    size_t cp_uncertainty_query_index_ = 0;
+    bool cp_uncertainty_has_query_times_ = false;
+    Eigen::aligned_vector<Eigen::Vector3d> coarse_positions_;
+    Eigen::aligned_vector<SO3d> coarse_rotations_;
 
   public:
     void ClearVisual()

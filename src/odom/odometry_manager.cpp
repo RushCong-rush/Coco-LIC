@@ -114,6 +114,14 @@ namespace cocolic
     trajectory_manager_->use_lidar_scale = use_lidar_scale_;
     trajectory_manager_->SetIntrinsic(K_);
     trajectory_manager_->SetCameraGeometry(camera_geometry_);
+    std::string cp_uncertainty_output_dir;
+    std::string cp_uncertainty_query_times_path;
+    nh.param<std::string>("cp_uncertainty_output_dir",
+                          cp_uncertainty_output_dir, "");
+    nh.param<std::string>("cp_uncertainty_query_times_path",
+                          cp_uncertainty_query_times_path, "");
+    trajectory_manager_->ConfigureControlPointDiagnostics(
+        cp_uncertainty_output_dir, cp_uncertainty_query_times_path);
 
     int division_coarse = node["division_coarse"].as<int>();
     cp_add_num_coarse_ = division_coarse;
@@ -380,13 +388,15 @@ namespace cocolic
       {
         trajectory_manager_->UpdateTrajectoryWithLIC(
             iter, msg.image_timestamp,
-            lidar_handler_->GetPointCorrespondence(), v_points_, px_obss_, 8);
+            lidar_handler_->GetPointCorrespondence(), v_points_, px_obss_, 8,
+            iter == lidar_iter_ - 1);
       }
       else
       {
         trajectory_manager_->UpdateTrajectoryWithLIC(
             iter, msg.image_timestamp,
-            lidar_handler_->GetPointCorrespondence(), {}, {}, 8);
+            lidar_handler_->GetPointCorrespondence(), {}, {}, 8,
+            iter == lidar_iter_ - 1);
         trajectory_manager_->SetProcessCurImg(false);
       }
     }

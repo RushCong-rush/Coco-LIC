@@ -22,9 +22,12 @@
 #include <ceres/dynamic_cost_function.h>
 
 #include <odom/trajectory_estimator.h>
+#include <odom/factor/analytic_diff/rd_spline_view.h>
+#include <odom/factor/analytic_diff/so3_spline_view.h>
 #include <utils/ceres_callbacks.h>
 
 #include <iostream>
+#include <chrono>
 #include <memory>
 #include <thread>
 #include <variant>
@@ -517,6 +520,185 @@ namespace cocolic
     }
 
     return summary;
+  }
+
+  ControlPointCovarianceResult
+  TrajectoryEstimator::ComputeControlPointCovariances(
+      const std::vector<int64_t> &trajectory_times_ns)
+  {
+    ControlPointCovarianceResult result;
+    std::vector<std::pair<const double *, const double *>> covariance_blocks;
+    std::vector<size_t> knot_indices;
+
+    for (size_t i = 0; i < trajectory_->numKnots(); ++i)
+    {
+      double *position = trajectory_->getKnotPos(i).data();
+      double *rotation = trajectory_->getKnotSO3(i).data();
+      if (!problem_->HasParameterBlock(position) ||
+          !problem_->HasParameterBlock(rotation) ||
+          problem_->IsParameterBlockConstant(position) ||
+          problem_->IsParameterBlockConstant(rotation))
+      {
+        continue;
+      }
+      covariance_blocks.emplace_back(position, position);
+      covariance_blocks.emplace_back(rotation, rotation);
+      knot_indices.push_back(i);
+    }
+
+    for (size_t a = 0; a < knot_indices.size(); ++a)
+    {
+      for (size_t b = a + 1; b < knot_indices.size(); ++b)
+      {
+        const size_t i = knot_indices[a];
+        const size_t j = knot_indices[b];
+        covariance_blocks.emplace_back(trajectory_->getKnotPos(i).data(),
+                                       trajectory_->getKnotPos(j).data());
+        covariance_blocks.emplace_back(trajectory_->getKnotSO3(i).data(),
+                                       trajectory_->getKnotSO3(j).data());
+      }
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    if (!covariance_blocks.empty())
+    {
+      ceres::Covariance::Options covariance_options;
+      covariance_options.num_threads = 1;
+      ceres::Covariance covariance(covariance_options);
+      result.success = covariance.Compute(covariance_blocks, problem_.get());
+
+      if (result.success)
+      {
+        for (size_t knot_index : knot_indices)
+        {
+          ControlPointCovariance control_point;
+          control_point.knot_index = knot_index;
+          double *position = trajectory_->getKnotPos(knot_index).data();
+          double *rotation = trajectory_->getKnotSO3(knot_index).data();
+          Eigen::Matrix<double, 3, 3, Eigen::RowMajor> position_covariance;
+          Eigen::Matrix<double, 3, 3, Eigen::RowMajor> rotation_covariance;
+          const bool position_ok = covariance.GetCovarianceBlockInTangentSpace(
+              position, position, position_covariance.data());
+          const bool rotation_ok = covariance.GetCovarianceBlockInTangentSpace(
+              rotation, rotation, rotation_covariance.data());
+          if (!position_ok || !rotation_ok ||
+              !position_covariance.allFinite() ||
+              !rotation_covariance.allFinite())
+          {
+            result.success = false;
+            result.control_points.clear();
+            break;
+          }
+          control_point.position = position_covariance;
+          control_point.rotation = rotation_covariance;
+          result.control_points.push_back(control_point);
+        }
+      }
+
+      if (result.success)
+      {
+        using analytic_derivative::RdSplineView;
+        using analytic_derivative::So3SplineView;
+        for (int64_t trajectory_time_ns : trajectory_times_ns)
+        {
+          TrajectoryCovariance trajectory_covariance;
+          trajectory_covariance.time_ns = trajectory_time_ns;
+          if (trajectory_time_ns < 0 ||
+              trajectory_time_ns >= trajectory_->maxTimeNsNURBS())
+          {
+            result.trajectory_queries.push_back(trajectory_covariance);
+            continue;
+          }
+
+          std::pair<int, double> spline_index;
+          trajectory_->GetIdxT(trajectory_time_ns, spline_index, true);
+          const size_t support_start =
+              spline_index.first - SplineOrder + 1;
+          std::array<double *, SplineOrder> position_blocks;
+          std::array<double *, SplineOrder> rotation_blocks;
+          for (size_t i = 0; i < SplineOrder; ++i)
+          {
+            position_blocks[i] =
+                trajectory_->getKnotPos(support_start + i).data();
+            rotation_blocks[i] =
+                trajectory_->getKnotSO3(support_start + i).data();
+          }
+
+          RdSplineView::JacobianStruct position_jacobian;
+          So3SplineView::JacobianStruct rotation_jacobian;
+          const Eigen::Matrix4d &blending_matrix =
+              trajectory_->blending_mats.at(support_start);
+          const Eigen::Matrix4d &cumulative_blending_matrix =
+              trajectory_->cumu_blending_mats.at(support_start);
+          trajectory_covariance.position = RdSplineView::evaluateNURBS(
+              spline_index, blending_matrix, position_blocks.data(),
+              &position_jacobian);
+          const SO3d trajectory_rotation = So3SplineView::EvaluateRpNURBS(
+              spline_index, cumulative_blending_matrix,
+              rotation_blocks.data(), &rotation_jacobian);
+          trajectory_covariance.rotation =
+              trajectory_rotation.unit_quaternion();
+
+          bool trajectory_covariance_ok = true;
+          for (size_t a = 0; a < SplineOrder; ++a)
+          {
+            double *position_a = position_blocks[a];
+            double *rotation_a = rotation_blocks[a];
+            if (!problem_->HasParameterBlock(position_a) ||
+                !problem_->HasParameterBlock(rotation_a) ||
+                problem_->IsParameterBlockConstant(position_a) ||
+                problem_->IsParameterBlockConstant(rotation_a))
+            {
+              continue;
+            }
+            for (size_t b = 0; b < SplineOrder; ++b)
+            {
+              double *position_b = position_blocks[b];
+              double *rotation_b = rotation_blocks[b];
+              if (!problem_->HasParameterBlock(position_b) ||
+                  !problem_->HasParameterBlock(rotation_b) ||
+                  problem_->IsParameterBlockConstant(position_b) ||
+                  problem_->IsParameterBlockConstant(rotation_b))
+              {
+                continue;
+              }
+              Eigen::Matrix<double, 3, 3, Eigen::RowMajor> position_cross;
+              Eigen::Matrix<double, 3, 3, Eigen::RowMajor> rotation_cross;
+              const bool position_ok =
+                  covariance.GetCovarianceBlockInTangentSpace(
+                      position_a, position_b, position_cross.data());
+              const bool rotation_ok =
+                  covariance.GetCovarianceBlockInTangentSpace(
+                      rotation_a, rotation_b, rotation_cross.data());
+              if (!position_ok || !rotation_ok)
+              {
+                trajectory_covariance_ok = false;
+                break;
+              }
+              const double weight_a = position_jacobian.d_val_d_knot[a];
+              const double weight_b = position_jacobian.d_val_d_knot[b];
+              trajectory_covariance.position_covariance +=
+                  weight_a * weight_b * position_cross;
+              trajectory_covariance.rotation_covariance +=
+                  rotation_jacobian.d_val_d_knot[a] * rotation_cross *
+                  rotation_jacobian.d_val_d_knot[b].transpose();
+            }
+            if (!trajectory_covariance_ok)
+              break;
+          }
+          trajectory_covariance.success =
+              trajectory_covariance_ok &&
+              trajectory_covariance.position_covariance.allFinite() &&
+              trajectory_covariance.rotation_covariance.allFinite();
+          result.trajectory_queries.push_back(trajectory_covariance);
+        }
+      }
+    }
+    result.computation_time_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start)
+            .count();
+    return result;
   }
 
   /// not used
