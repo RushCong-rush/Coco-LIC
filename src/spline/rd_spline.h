@@ -277,6 +277,12 @@ class RdSpline {
     return evaluateNURBS<1>(su.first, su.second, delta_t, blend_mat);
   }
 
+  inline VecD accelerationNURBS(const std::pair<int, double>& su,
+                                double delta_t,
+                                const Eigen::Matrix4d& blend_mat) const {
+    return evaluateNURBS<2>(su.first, su.second, delta_t, blend_mat);
+  }
+
   /// @brief Alias for second derivative of spline. See \ref evaluate.
   inline VecD acceleration(int64_t time_ns, JacobianStruct* J = nullptr) const {
     return evaluate<2>(time_ns, J);

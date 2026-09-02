@@ -398,6 +398,11 @@ class Se3Spline {
     return pos_spline.velocityNURBS(su, delta_t, blend_mat);
   }
 
+  inline Vec3 transAccelWorldNURBS(const std::pair<int, double>& su,
+    double delta_t, const Eigen::Matrix4d& blend_mat) const {
+    return pos_spline.accelerationNURBS(su, delta_t, blend_mat);
+  }
+
   /// @brief Position in the world frame.
   ///
   /// @param[in] time_ns time to evaluate position in seconds
@@ -436,6 +441,27 @@ class Se3Spline {
     return so3_spline.velocityBodyNURBS(su.first - 3, su.second, 
                                                                      (knts[su.first + 1] - knts[su.first]) * NS_TO_S, 
                                                                      cumulative_blending_matrix);
+  }
+
+  inline Vec3 rotAccelBodyNURBS(int64_t time_ns) const {
+    std::pair<int, double> su;
+    bool found = false;
+    for (int i = 0; i < int(knts.size()) - 1; ++i) {
+      if (time_ns >= knts[i] && time_ns < knts[i + 1]) {
+        su.first = i;
+        su.second =
+            double(time_ns - knts[i]) / double(knts[i + 1] - knts[i]);
+        found = true;
+        break;
+      }
+    }
+    BASALT_ASSERT_STREAM(found, "rotAccelBodyNURBS query outside knots");
+    const double delta_t =
+        (knts[su.first + 1] - knts[su.first]) * NS_TO_S;
+    const Eigen::Matrix4d& cumulative_blending_matrix =
+        cumu_blending_mats[su.first - 3];
+    return so3_spline.accelerationBodyNURBS(
+        su.first - 3, su.second, delta_t, cumulative_blending_matrix);
   }
 
   inline Vec3 rotAccelBody(int64_t time_ns) const {

@@ -113,16 +113,20 @@ namespace cocolic
     trajectory_covariance_stream_.open(
         output_dir + "/trajectory_covariance.csv",
         std::ios::out | std::ios::trunc);
+    trajectory_dynamics_stream_.open(
+        output_dir + "/trajectory_dynamics.csv",
+        std::ios::out | std::ios::trunc);
     optimization_window_stream_.open(
         output_dir + "/optimization_windows.csv",
         std::ios::out | std::ios::trunc);
     if (!cp_covariance_stream_ || !trajectory_covariance_stream_ ||
-        !optimization_window_stream_)
+        !trajectory_dynamics_stream_ || !optimization_window_stream_)
     {
       LOG(ERROR) << "Cannot open control-point diagnostic output: "
                  << output_dir;
       cp_covariance_stream_.close();
       trajectory_covariance_stream_.close();
+      trajectory_dynamics_stream_.close();
       optimization_window_stream_.close();
       return;
     }
@@ -148,6 +152,31 @@ namespace cocolic
            "position_cov_yy,position_cov_yz,position_cov_zz,"
            "rotation_cov_xx,rotation_cov_xy,rotation_cov_xz,"
            "rotation_cov_yy,rotation_cov_yz,rotation_cov_zz\n";
+    trajectory_dynamics_stream_
+        << std::setprecision(17)
+        << "window_index,origin_time_s,query_time_s,horizon_s,"
+           "origin_position_x,origin_position_y,origin_position_z,"
+           "origin_quaternion_x,origin_quaternion_y,origin_quaternion_z,"
+           "origin_quaternion_w,"
+           "origin_linear_velocity_x,origin_linear_velocity_y,"
+           "origin_linear_velocity_z,"
+           "origin_linear_acceleration_x,origin_linear_acceleration_y,"
+           "origin_linear_acceleration_z,"
+           "origin_angular_velocity_x,origin_angular_velocity_y,"
+           "origin_angular_velocity_z,"
+           "origin_angular_acceleration_x,origin_angular_acceleration_y,"
+           "origin_angular_acceleration_z,"
+           "target_position_x,target_position_y,target_position_z,"
+           "target_quaternion_x,target_quaternion_y,target_quaternion_z,"
+           "target_quaternion_w,"
+           "target_linear_velocity_x,target_linear_velocity_y,"
+           "target_linear_velocity_z,"
+           "target_linear_acceleration_x,target_linear_acceleration_y,"
+           "target_linear_acceleration_z,"
+           "target_angular_velocity_x,target_angular_velocity_y,"
+           "target_angular_velocity_z,"
+           "target_angular_acceleration_x,target_angular_acceleration_y,"
+           "target_angular_acceleration_z\n";
     optimization_window_stream_
         << std::setprecision(17)
         << "window_index,window_start_time_s,window_end_time_s,"
@@ -157,6 +186,106 @@ namespace cocolic
            "solution_usable,initial_cost,final_cost,iterations,"
            "successful_steps,unsuccessful_steps,optimization_time_ms,"
            "lidar_factors,imu_factors,camera_factors,prior_factors,bias_factors\n";
+  }
+
+  TrajectoryManager::TrajectoryDynamicsState
+  TrajectoryManager::EvaluateTrajectoryDynamics(int64_t time_ns)
+  {
+    TrajectoryDynamicsState state;
+    if (time_ns < trajectory_->knts.at(3) ||
+        time_ns >= trajectory_->knts.back())
+      return state;
+
+    std::pair<int, double> su;
+    trajectory_->GetIdxT(time_ns, su, true);
+    if (su.first < 3 || su.first + 1 >= int(trajectory_->knts.size()))
+      return state;
+
+    const double delta_t =
+        (trajectory_->knts[su.first + 1] - trajectory_->knts[su.first]) *
+        NS_TO_S;
+    const Eigen::Matrix4d& blending_matrix =
+        trajectory_->blending_mats.at(su.first - 3);
+    std::pair<int, double> control_point_query(su.first - 3, su.second);
+
+    const SE3d pose = trajectory_->GetIMUPoseNsNURBS(time_ns);
+    state.time_ns = time_ns;
+    state.position = pose.translation();
+    state.rotation = pose.unit_quaternion();
+    state.linear_velocity = trajectory_->GetTransVelWorldNURBS(
+        control_point_query, delta_t, blending_matrix);
+    state.linear_acceleration = trajectory_->GetTransAccelWorldNURBS(
+        control_point_query, delta_t, blending_matrix);
+    state.angular_velocity =
+        trajectory_->GetRotVelBodyNsNURBS(time_ns);
+    state.angular_acceleration =
+        trajectory_->GetRotAccelBodyNsNURBS(time_ns);
+    state.valid = state.position.allFinite() &&
+                  state.rotation.coeffs().allFinite() &&
+                  state.linear_velocity.allFinite() &&
+                  state.linear_acceleration.allFinite() &&
+                  state.angular_velocity.allFinite() &&
+                  state.angular_acceleration.allFinite();
+    return state;
+  }
+
+  void TrajectoryManager::WriteTrajectoryDynamicsDiagnostics(
+      size_t window_index, double data_start_time_s)
+  {
+    const int64_t current_end_time_ns = opt_max_t_ns - 1;
+    const TrajectoryDynamicsState current_end =
+        EvaluateTrajectoryDynamics(current_end_time_ns);
+    if (previous_window_end_dynamics_.valid)
+    {
+      const int64_t window_duration_ns = opt_max_t_ns - opt_min_t_ns;
+      for (int step = 1; step <= 4; ++step)
+      {
+        const int64_t query_time_ns =
+            step < 4
+                ? opt_min_t_ns + window_duration_ns * step / 4
+                : current_end_time_ns;
+        const TrajectoryDynamicsState target =
+            EvaluateTrajectoryDynamics(query_time_ns);
+        if (!target.valid)
+          continue;
+
+        const TrajectoryDynamicsState& origin =
+            previous_window_end_dynamics_;
+        const double origin_time_s =
+            data_start_time_s + origin.time_ns * NS_TO_S;
+        const double query_time_s =
+            data_start_time_s + target.time_ns * NS_TO_S;
+        const double horizon_s =
+            (target.time_ns - origin.time_ns) * NS_TO_S;
+        const auto write_state = [this](const TrajectoryDynamicsState& state) {
+          trajectory_dynamics_stream_
+              << state.position.x() << ',' << state.position.y() << ','
+              << state.position.z() << ',' << state.rotation.x() << ','
+              << state.rotation.y() << ',' << state.rotation.z() << ','
+              << state.rotation.w() << ',' << state.linear_velocity.x() << ','
+              << state.linear_velocity.y() << ','
+              << state.linear_velocity.z() << ','
+              << state.linear_acceleration.x() << ','
+              << state.linear_acceleration.y() << ','
+              << state.linear_acceleration.z() << ','
+              << state.angular_velocity.x() << ','
+              << state.angular_velocity.y() << ','
+              << state.angular_velocity.z() << ','
+              << state.angular_acceleration.x() << ','
+              << state.angular_acceleration.y() << ','
+              << state.angular_acceleration.z();
+        };
+
+        trajectory_dynamics_stream_
+            << window_index << ',' << origin_time_s << ',' << query_time_s
+            << ',' << horizon_s << ',';
+        write_state(origin);
+        trajectory_dynamics_stream_ << ',';
+        write_state(target);
+        trajectory_dynamics_stream_ << '\n';
+      }
+    }
+    previous_window_end_dynamics_ = current_end;
   }
 
   void TrajectoryManager::CaptureCoarseControlPoints()
@@ -218,6 +347,7 @@ namespace cocolic
 
     ControlPointCovarianceResult covariance =
         estimator.ComputeControlPointCovariances(trajectory_times_ns);
+    WriteTrajectoryDynamicsDiagnostics(window_index, data_start_time_s);
     const size_t successful_trajectory_queries = std::count_if(
         covariance.trajectory_queries.begin(),
         covariance.trajectory_queries.end(),
@@ -297,6 +427,7 @@ namespace cocolic
     optimization_window_stream_.flush();
     cp_covariance_stream_.flush();
     trajectory_covariance_stream_.flush();
+    trajectory_dynamics_stream_.flush();
   }
 
   void TrajectoryManager::InitFactorInfo(

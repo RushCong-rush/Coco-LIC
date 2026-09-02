@@ -77,6 +77,20 @@ namespace cocolic
 
   class TrajectoryManager
   {
+    struct TrajectoryDynamicsState
+    {
+      EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+      int64_t time_ns = -1;
+      Eigen::Vector3d position = Eigen::Vector3d::Zero();
+      Eigen::Quaterniond rotation = Eigen::Quaterniond::Identity();
+      Eigen::Vector3d linear_velocity = Eigen::Vector3d::Zero();
+      Eigen::Vector3d linear_acceleration = Eigen::Vector3d::Zero();
+      Eigen::Vector3d angular_velocity = Eigen::Vector3d::Zero();
+      Eigen::Vector3d angular_acceleration = Eigen::Vector3d::Zero();
+      bool valid = false;
+    };
+
   public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
@@ -246,6 +260,11 @@ namespace cocolic
         int prior_factor_count,
         double optimization_time_ms);
 
+    TrajectoryDynamicsState EvaluateTrajectoryDynamics(int64_t time_ns);
+
+    void WriteTrajectoryDynamicsDiagnostics(
+        size_t window_index, double data_start_time_s);
+
     void TranfromTraj4DoF(double t_min, double t_max, const Eigen::Matrix3d &R0,
                           const Eigen::Vector3d &t0, bool apply = true);
 
@@ -308,6 +327,7 @@ namespace cocolic
     std::string cp_uncertainty_output_dir_;
     std::ofstream cp_covariance_stream_;
     std::ofstream trajectory_covariance_stream_;
+    std::ofstream trajectory_dynamics_stream_;
     std::ofstream optimization_window_stream_;
     size_t cp_uncertainty_window_index_ = 0;
     std::vector<double> cp_uncertainty_query_times_s_;
@@ -315,6 +335,7 @@ namespace cocolic
     bool cp_uncertainty_has_query_times_ = false;
     Eigen::aligned_vector<Eigen::Vector3d> coarse_positions_;
     Eigen::aligned_vector<SO3d> coarse_rotations_;
+    TrajectoryDynamicsState previous_window_end_dynamics_;
 
   public:
     void ClearVisual()

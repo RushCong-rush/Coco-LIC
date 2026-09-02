@@ -190,6 +190,12 @@ class Trajectory : public Se3Spline<SplineOrder, double> {
     return this->transVelWorldNURBS(su, delta_t, blend_mat);
   }
 
+  Eigen::Vector3d GetTransAccelWorldNURBS(
+      const std::pair<int, double> su, double delta_t,
+      const Eigen::Matrix4d blend_mat) const {
+    return this->transAccelWorldNURBS(su, delta_t, blend_mat);
+  }
+
   Eigen::Vector3d GetPositionWorldNURBS(const double timestamp) const {
     return this->positionWorldNURBS(timestamp * S_TO_NS);
   }
@@ -204,6 +210,10 @@ class Trajectory : public Se3Spline<SplineOrder, double> {
 
   Eigen::Vector3d GetRotVelBodyNsNURBS(const int64_t timestamp) const {
     return this->rotVelBodyNURBS(timestamp);
+  }
+
+  Eigen::Vector3d GetRotAccelBodyNsNURBS(const int64_t timestamp) const {
+    return this->rotAccelBodyNURBS(timestamp);
   }
 
   SE3d GetCameraPose(const double timestamp) const {

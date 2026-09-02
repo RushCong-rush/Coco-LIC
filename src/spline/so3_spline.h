@@ -367,6 +367,38 @@ class So3Spline {
     return rot_vel;
   }
 
+  Vec3 accelerationBodyNURBS(
+      size_t s, double u, double delta_t,
+      const Eigen::Matrix4d& blend_mat) const {
+    VecN p;
+    baseCoeffsWithTime<0>(p, u);
+    const VecN coeff = blend_mat * p;
+
+    baseCoeffsWithTime<1>(p, u);
+    const VecN dcoeff = (1.0 / delta_t) * blend_mat * p;
+
+    baseCoeffsWithTime<2>(p, u);
+    const VecN ddcoeff = (1.0 / (delta_t * delta_t)) * blend_mat * p;
+
+    Vec3 rot_vel = Vec3::Zero();
+    Vec3 rot_accel = Vec3::Zero();
+    for (int i = 0; i < DEG; ++i) {
+      const SO3& p0 = knots[s + i];
+      const SO3& p1 = knots[s + i + 1];
+      const Vec3 delta = (p0.inverse() * p1).log();
+      const SO3 rot = SO3::exp(-delta * coeff[i + 1]);
+
+      rot_vel = rot * rot_vel;
+      const Vec3 vel_current = dcoeff[i + 1] * delta;
+      rot_vel += vel_current;
+
+      rot_accel = rot * rot_accel;
+      rot_accel +=
+          ddcoeff[i + 1] * delta + rot_vel.cross(vel_current);
+    }
+    return rot_accel;
+  }
+
   Vec3 accelerationBody(int64_t time_ns, Vec3* vel_body = nullptr) const {
     std::pair<double, size_t> ui = computeTIndexNs(time_ns);
     size_t s = ui.second;
