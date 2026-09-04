@@ -63,6 +63,29 @@ Dr. Fu Zhang < fuzhang@hku.hk >.
 #include <utils/log_utils.h>
 extern std::string data_dump_dir;
 
+struct RgbPointPtrLess
+{
+    bool deterministic = false;
+
+    bool operator()(const void *lhs, const void *rhs) const
+    {
+        if (lhs == rhs)
+        {
+            return false;
+        }
+        if (deterministic)
+        {
+            const int lhs_index = static_cast<const RGB_pts *>(lhs)->m_pt_index;
+            const int rhs_index = static_cast<const RGB_pts *>(rhs)->m_pt_index;
+            if (lhs_index != rhs_index)
+            {
+                return lhs_index < rhs_index;
+            }
+        }
+        return std::less<const void *>()(lhs, rhs);
+    }
+};
+
 class Rgbmap_tracker
 {
   public:
@@ -84,8 +107,8 @@ class Rgbmap_tracker
     std::vector< cv::Point2f > m_current_tracked_pts_tmp;
     std::vector< cv::Scalar >  m_colors;
     std::vector< void * >      m_rgb_pts_ptr_vec_in_last_frame;
-    std::map< void *, cv::Point2f > m_map_rgb_pts_in_last_frame_pos;
-    std::map< void *, cv::Point2f > m_map_rgb_pts_in_current_frame_pos;
+    std::map< void *, cv::Point2f, RgbPointPtrLess > m_map_rgb_pts_in_last_frame_pos;
+    std::map< void *, cv::Point2f, RgbPointPtrLess > m_map_rgb_pts_in_current_frame_pos;
 
     std::map< int, std::vector< cv::Point2f > > m_map_id_pts_vec;
     std::map< int, std::vector< int > >         m_map_id_pts_frame;
@@ -94,7 +117,7 @@ class Rgbmap_tracker
     eigen_q                                   q_last_estimated_q = eigen_q::Identity();
     vec_3                                     t_last_estimated = vec_3( 0, 0, 0 );
     std::shared_ptr< LK_optical_flow_kernel > m_lk_optical_flow_kernel;
-    Rgbmap_tracker();
+    explicit Rgbmap_tracker(bool deterministic_order = false);
     ~Rgbmap_tracker(){};
 
     cv::Mat last_img;

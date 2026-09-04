@@ -19,6 +19,14 @@
 #include "marginalization_factor.h"
 #include <iomanip>
 
+namespace {
+bool g_marginalization_deterministic_mode = false;
+}
+
+void SetMarginalizationDeterministicMode(bool enabled) {
+  g_marginalization_deterministic_mode = enabled;
+}
+
 void ResidualBlockInfo::Evaluate() {
   //
   residuals.resize(cost_function->num_residuals());
@@ -92,12 +100,18 @@ void MarginalizationInfo::addResidualBlockInfo(
   for (int i = 0; i < static_cast<int>(residual_block_info->parameter_blocks.size()); i++) {
     double *addr = parameter_blocks[i];  
     int size = parameter_block_sizes[i];
-    parameter_block_size[reinterpret_cast<long>(addr)] = size;
+    const long key = reinterpret_cast<long>(addr);
+    if (parameter_block_size.emplace(key, size).second) {
+      parameter_block_order.push_back(key);
+    }
   }
   // 
   for (int i = 0; i < static_cast<int>(residual_block_info->drop_set.size()); i++) {
     double *addr = parameter_blocks[residual_block_info->drop_set[i]];  
-    parameter_block_idx[reinterpret_cast<long>(addr)] = 0;  
+    const long key = reinterpret_cast<long>(addr);
+    if (parameter_block_idx.emplace(key, 0).second) {
+      drop_block_order.push_back(key);
+    }
   }
 }
 
@@ -141,7 +155,7 @@ void *ThreadsConstructA(void *threadsstruct) {
   // 
   for (auto it : p->sub_factors) {
     for (int i = 0; i < static_cast<int>(it->parameter_blocks.size()); i++) {
-      // 
+      //
       int idx_i = p->parameter_block_idx[reinterpret_cast<long>(it->parameter_blocks[i])];
       int size_i = p->parameter_block_size[reinterpret_cast<long>(it->parameter_blocks[i])];
       if (size_i == 4) size_i = 3;
@@ -171,19 +185,35 @@ bool MarginalizationInfo::marginalize() {
   double time[10];
 
   int pos = 0;
-  for (auto &it : parameter_block_idx) {
-    // 
-    it.second = pos;
-    pos += localSize(parameter_block_size[it.first]);
+  if (g_marginalization_deterministic_mode) {
+    for (long key : drop_block_order) {
+      parameter_block_idx[key] = pos;
+      pos += localSize(parameter_block_size[key]);
+    }
+  } else {
+    for (auto &it : parameter_block_idx) {
+      //
+      it.second = pos;
+      pos += localSize(parameter_block_size[it.first]);
+    }
   }
   // 
   m = pos;  
   //
-  for (const auto &it : parameter_block_size) {
-    if (parameter_block_idx.find(it.first) == parameter_block_idx.end()) {
-      // 
-      parameter_block_idx[it.first] = pos;
-      pos += localSize(it.second);
+  if (g_marginalization_deterministic_mode) {
+    for (long key : parameter_block_order) {
+      if (parameter_block_idx.find(key) == parameter_block_idx.end()) {
+        parameter_block_idx[key] = pos;
+        pos += localSize(parameter_block_size[key]);
+      }
+    }
+  } else {
+    for (const auto &it : parameter_block_size) {
+      if (parameter_block_idx.find(it.first) == parameter_block_idx.end()) {
+        //
+        parameter_block_idx[it.first] = pos;
+        pos += localSize(it.second);
+      }
     }
   }
   // 
@@ -306,14 +336,27 @@ std::vector<double *> MarginalizationInfo::getParameterBlocks(
   keep_block_data.clear();
 
   // 
-  for (const auto &it : parameter_block_idx) {
-    if (it.second >= m) {
+  if (g_marginalization_deterministic_mode) {
+    for (long key : parameter_block_order) {
+      const auto idx_it = parameter_block_idx.find(key);
+      if (idx_it == parameter_block_idx.end() || idx_it->second < m) {
+        continue;
+      }
+      keep_block_size.push_back(parameter_block_size[key]);
+      keep_block_idx.push_back(idx_it->second);
+      keep_block_data.push_back(parameter_block_data[key]);
+      keep_block_addr.push_back(addr_shift[key]);
+    }
+  } else {
+    for (const auto &it : parameter_block_idx) {
+      if (it.second >= m) {
       // 
-      keep_block_size.push_back(parameter_block_size[it.first]);
-      keep_block_idx.push_back(parameter_block_idx[it.first]);
-      keep_block_data.push_back(parameter_block_data[it.first]);
+        keep_block_size.push_back(parameter_block_size[it.first]);
+        keep_block_idx.push_back(parameter_block_idx[it.first]);
+        keep_block_data.push_back(parameter_block_data[it.first]);
       // 
-      keep_block_addr.push_back(addr_shift[it.first]);
+        keep_block_addr.push_back(addr_shift[it.first]);
+      }
     }
   }
 
@@ -331,14 +374,27 @@ std::vector<double *> MarginalizationInfo::getParameterBlocks() {
   keep_block_data.clear();
 
   //
-  for (const auto &it : parameter_block_idx) {
-    if (it.second >= m) {
+  if (g_marginalization_deterministic_mode) {
+    for (long key : parameter_block_order) {
+      const auto idx_it = parameter_block_idx.find(key);
+      if (idx_it == parameter_block_idx.end() || idx_it->second < m) {
+        continue;
+      }
+      keep_block_size.push_back(parameter_block_size[key]);
+      keep_block_idx.push_back(idx_it->second);
+      keep_block_data.push_back(parameter_block_data[key]);
+      keep_block_addr.push_back(reinterpret_cast<double *>(key));
+    }
+  } else {
+    for (const auto &it : parameter_block_idx) {
+      if (it.second >= m) {
       //
-      keep_block_size.push_back(parameter_block_size[it.first]);
-      keep_block_idx.push_back(parameter_block_idx[it.first]);
-      keep_block_data.push_back(parameter_block_data[it.first]);
+        keep_block_size.push_back(parameter_block_size[it.first]);
+        keep_block_idx.push_back(parameter_block_idx[it.first]);
+        keep_block_data.push_back(parameter_block_data[it.first]);
       //
-      keep_block_addr.push_back(reinterpret_cast<double *>(it.first));
+        keep_block_addr.push_back(reinterpret_cast<double *>(it.first));
+      }
     }
   }
 
@@ -409,5 +465,3 @@ bool MarginalizationFactor::Evaluate(double const *const *parameters,
   }
   return true;
 }
-
-

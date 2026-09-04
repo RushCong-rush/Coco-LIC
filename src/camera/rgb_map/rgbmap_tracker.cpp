@@ -55,7 +55,9 @@ Dr. Fu Zhang < fuzhang@hku.hk >.
 #include <Eigen/SVD>
 #include <opencv2/core/eigen.hpp>
 
-Rgbmap_tracker::Rgbmap_tracker()
+Rgbmap_tracker::Rgbmap_tracker(bool deterministic_order)
+    : m_map_rgb_pts_in_last_frame_pos(RgbPointPtrLess{deterministic_order}),
+      m_map_rgb_pts_in_current_frame_pos(RgbPointPtrLess{deterministic_order})
 {
     cv::TermCriteria criteria = cv::TermCriteria((cv::TermCriteria::COUNT) + (cv::TermCriteria::EPS), 10, 0.05);
     if (m_lk_optical_flow_kernel == nullptr)

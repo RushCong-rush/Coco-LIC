@@ -165,6 +165,35 @@ namespace cocolic
 
     void ConfigureObservabilityDiagnostics(const std::string &output_dir);
 
+    void ConfigureRobustProcessDiagnostics(
+        const std::string &output_dir,
+        double scale_time_constant_s);
+
+    void SetRobustProcessPriorEnabled(bool enabled)
+    {
+      robust_process_prior_enabled_ = enabled;
+    }
+
+    void SetRobustProcessTranslationEnabled(bool enabled)
+    {
+      robust_process_translation_enabled_ = enabled;
+    }
+
+    void SetRobustProcessRotationEnabled(bool enabled)
+    {
+      robust_process_rotation_enabled_ = enabled;
+    }
+
+    void SetRobustProcessProjectionDiagnosticsEnabled(bool enabled)
+    {
+      robust_process_projection_diagnostics_enabled_ = enabled;
+    }
+
+    void SetRobustProcessRiskScalingEnabled(bool enabled)
+    {
+      robust_process_risk_scaling_enabled_ = enabled;
+    }
+
     void UpdateLiDARAttribute(double scan_time_min, double scan_time_max);
 
     void Log(std::string descri) const;
@@ -278,6 +307,35 @@ namespace cocolic
         const ceres::Solver::Summary &summary,
         double optimization_time_ms);
 
+    struct RobustProcessDiagnostic
+    {
+      bool valid = false;
+      bool scale_ready = false;
+      double interval_s = 0.0;
+      double translation_q_hat = 0.0;
+      double translation_q_used = 0.0;
+      double translation_q_next = 0.0;
+      double translation_nis = 0.0;
+      double translation_influence = 0.0;
+      double rotation_q_hat = 0.0;
+      double rotation_q_used = 0.0;
+      double rotation_q_next = 0.0;
+      double rotation_nis = 0.0;
+      double rotation_influence = 0.0;
+    };
+
+    void PrepareRobustProcessDiagnostic();
+
+    std::vector<size_t> CurrentRobustProcessSupportStarts() const;
+
+    double CurrentRobustProcessCostScale() const;
+
+    int AddCurrentRobustProcessFactors(TrajectoryEstimator &estimator);
+
+    void WriteRobustProcessDiagnostic(
+        const ceres::Solver::Summary &summary,
+        double optimization_time_ms);
+
     TrajectoryDynamicsState EvaluateTrajectoryDynamics(int64_t time_ns);
 
     void WriteTrajectoryDynamicsDiagnostics(
@@ -361,6 +419,22 @@ namespace cocolic
     CausalObservabilityDiagnostics pending_observability_;
     ImuExcitation pending_imu_excitation_;
     bool pending_observability_valid_ = false;
+
+    std::string robust_process_output_dir_;
+    std::ofstream robust_process_stream_;
+    size_t robust_process_window_index_ = 0;
+    double robust_process_scale_time_constant_s_ = 1.0;
+    bool robust_process_scale_initialized_ = false;
+    double robust_process_translation_log_q_ = 0.0;
+    double robust_process_rotation_log_q_ = 0.0;
+    RobustProcessDiagnostic pending_robust_process_;
+    CameraRobustRisk pending_camera_risk_;
+    ProcessProjectionResult pending_process_projection_;
+    bool robust_process_prior_enabled_ = false;
+    bool robust_process_translation_enabled_ = true;
+    bool robust_process_rotation_enabled_ = true;
+    bool robust_process_projection_diagnostics_enabled_ = false;
+    bool robust_process_risk_scaling_enabled_ = false;
 
   public:
     void ClearVisual()

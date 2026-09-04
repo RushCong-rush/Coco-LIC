@@ -242,6 +242,128 @@ namespace cocolic
            "unsuccessful_steps,optimization_time_ms\n";
   }
 
+  void TrajectoryManager::ConfigureRobustProcessDiagnostics(
+      const std::string &output_dir,
+      double scale_time_constant_s)
+  {
+    if (scale_time_constant_s <= 0.0)
+    {
+      LOG(ERROR) << "Robust process scale time constant must be positive";
+      return;
+    }
+    robust_process_scale_time_constant_s_ = scale_time_constant_s;
+    if (output_dir.empty())
+      return;
+
+    boost::filesystem::create_directories(output_dir);
+    robust_process_stream_.open(output_dir + "/process_prior_windows.csv",
+                                std::ios::out | std::ios::trunc);
+    if (!robust_process_stream_)
+    {
+      LOG(ERROR) << "Cannot open robust process diagnostic output: "
+                 << output_dir;
+      return;
+    }
+
+    robust_process_output_dir_ = output_dir;
+    robust_process_stream_
+        << std::setprecision(17)
+        << "window_index,window_start_time_s,window_end_time_s,"
+           "diagnostic_valid,scale_ready,interval_s,"
+           "translation_q_hat,translation_q_used,translation_q_next,"
+           "translation_nis,translation_nis_per_dof,"
+           "translation_influence,rotation_q_hat,rotation_q_used,"
+           "rotation_q_next,rotation_nis,rotation_nis_per_dof,"
+           "rotation_influence,camera_risk_valid,camera_factor_blocks,"
+           "camera_influence_mean,camera_risk,camera_risk_time_ms,"
+           "risk_scaling_enabled,process_cost_scale,"
+           "projection_diagnostics_enabled,projection_success,"
+           "projection_time_ms,projection_residual_count,"
+           "projection_state_dimension,projection_supports,"
+           "translation_projection_valid,translation_projection_weight_min,"
+           "translation_projection_weight_median,"
+           "translation_projection_weight_max,"
+           "translation_relative_information_min,"
+           "translation_relative_information_median,"
+           "translation_relative_information_max,"
+           "rotation_projection_valid,rotation_projection_weight_min,"
+           "rotation_projection_weight_median,"
+           "rotation_projection_weight_max,"
+           "rotation_relative_information_min,"
+           "rotation_relative_information_median,"
+           "rotation_relative_information_max,"
+           "coarse_to_fine_position_median,"
+           "coarse_to_fine_position_max,coarse_to_fine_rotation_median,"
+           "coarse_to_fine_rotation_max,solution_usable,initial_cost,"
+           "final_cost,iterations,successful_steps,unsuccessful_steps,"
+           "optimization_time_ms\n";
+  }
+
+  std::vector<size_t> TrajectoryManager::CurrentRobustProcessSupportStarts()
+      const
+  {
+    std::vector<size_t> support_starts;
+    if ((!robust_process_prior_enabled_ &&
+         !robust_process_projection_diagnostics_enabled_) ||
+        !pending_robust_process_.valid ||
+        !pending_robust_process_.scale_ready)
+      return support_starts;
+
+    const int knot_count = static_cast<int>(trajectory_->numKnots());
+    const int first = knot_count - division_ - 3;
+    const int last = knot_count - 4;
+    for (int support_start = std::max(0, first);
+         support_start <= last; ++support_start)
+      support_starts.push_back(static_cast<size_t>(support_start));
+    return support_starts;
+  }
+
+  double TrajectoryManager::CurrentRobustProcessCostScale() const
+  {
+    if (!robust_process_risk_scaling_enabled_)
+      return 1.0;
+    return pending_camera_risk_.valid ? pending_camera_risk_.risk : 0.0;
+  }
+
+  int TrajectoryManager::AddCurrentRobustProcessFactors(
+      TrajectoryEstimator &estimator)
+  {
+    const std::vector<size_t> support_starts =
+        CurrentRobustProcessSupportStarts();
+    pending_process_projection_ = ProcessProjectionResult();
+    if (robust_process_projection_diagnostics_enabled_ &&
+        !support_starts.empty())
+    {
+      pending_process_projection_ = estimator.ComputeRobustProcessProjections(
+          support_starts, pending_robust_process_.translation_q_used,
+          pending_robust_process_.rotation_q_used);
+    }
+    if (!robust_process_prior_enabled_)
+      return 0;
+
+    const double process_cost_scale = CurrentRobustProcessCostScale();
+    if (process_cost_scale <= 0.0)
+      return 0;
+
+    int factor_count = 0;
+    for (size_t support_start : support_starts)
+    {
+      Eigen::Matrix<double, 6, 6> translation_sqrt_weight =
+          Eigen::Matrix<double, 6, 6>::Identity();
+      Eigen::Matrix<double, 6, 6> rotation_sqrt_weight =
+          Eigen::Matrix<double, 6, 6>::Identity();
+      estimator.AddRobustWnoaProcessFactors(
+          support_start, pending_robust_process_.translation_q_used,
+          pending_robust_process_.rotation_q_used,
+          translation_sqrt_weight, rotation_sqrt_weight,
+          robust_process_translation_enabled_,
+          robust_process_rotation_enabled_, process_cost_scale);
+      factor_count += static_cast<int>(robust_process_translation_enabled_);
+      factor_count += static_cast<int>(robust_process_rotation_enabled_);
+    }
+    return factor_count;
+  }
+
   TrajectoryManager::TrajectoryDynamicsState
   TrajectoryManager::EvaluateTrajectoryDynamics(int64_t time_ns)
   {
@@ -345,7 +467,8 @@ namespace cocolic
   void TrajectoryManager::CaptureCoarseControlPoints()
   {
     if (cp_uncertainty_output_dir_.empty() &&
-        observability_output_dir_.empty())
+        observability_output_dir_.empty() &&
+        robust_process_output_dir_.empty())
       return;
 
     coarse_positions_.clear();
@@ -357,6 +480,258 @@ namespace cocolic
       coarse_positions_.push_back(trajectory_->getKnotPos(i));
       coarse_rotations_.push_back(trajectory_->getKnotSO3(i));
     }
+  }
+
+  void TrajectoryManager::PrepareRobustProcessDiagnostic()
+  {
+    pending_robust_process_ = RobustProcessDiagnostic();
+    pending_camera_risk_ = CameraRobustRisk();
+    if (!robust_process_prior_enabled_ && robust_process_output_dir_.empty() &&
+        !robust_process_projection_diagnostics_enabled_)
+      return;
+
+    const TrajectoryDynamicsState origin =
+        EvaluateTrajectoryDynamics(opt_min_t_ns);
+    const TrajectoryDynamicsState target =
+        EvaluateTrajectoryDynamics(opt_max_t_ns - 1);
+    if (!origin.valid || !target.valid)
+      return;
+
+    const double dt = (target.time_ns - origin.time_ns) * NS_TO_S;
+    if (dt <= 0.0)
+      return;
+
+    Eigen::Matrix2d unit_covariance;
+    unit_covariance << dt * dt * dt / 3.0, dt * dt / 2.0,
+                       dt * dt / 2.0, dt;
+    const Eigen::Matrix2d unit_information = unit_covariance.inverse();
+
+    Eigen::Matrix<double, 6, 1> translation_error;
+    translation_error.head<3>() =
+        target.position - origin.position - origin.linear_velocity * dt;
+    translation_error.tail<3>() =
+        target.linear_velocity - origin.linear_velocity;
+
+    const SO3d origin_rotation(origin.rotation);
+    const SO3d target_rotation(target.rotation);
+    const Eigen::Vector3d phi =
+        (origin_rotation.inverse() * target_rotation).log();
+    Eigen::Matrix3d right_jacobian_inverse;
+    Sophus::rightJacobianInvSO3(phi, right_jacobian_inverse);
+    Eigen::Matrix<double, 6, 1> rotation_error;
+    rotation_error.head<3>() = phi - origin.angular_velocity * dt;
+    rotation_error.tail<3>() =
+        right_jacobian_inverse * target.angular_velocity -
+        origin.angular_velocity;
+
+    const auto process_energy = [&unit_information](
+                                    const Eigen::Matrix<double, 6, 1> &error) {
+      double energy = 0.0;
+      for (int axis = 0; axis < 3; ++axis)
+      {
+        Eigen::Vector2d axis_error(error[axis], error[axis + 3]);
+        energy += axis_error.dot(unit_information * axis_error);
+      }
+      return energy;
+    };
+    const double translation_energy = process_energy(translation_error);
+    const double rotation_energy = process_energy(rotation_error);
+    const double translation_floor = opt_weight_.imu_noise.sigma_a_2;
+    const double rotation_floor =
+        opt_weight_.imu_noise.sigma_w_2 / (dt * dt);
+    const double translation_q_hat = std::max(
+        translation_energy / 6.0, translation_floor);
+    const double rotation_q_hat = std::max(
+        rotation_energy / 6.0, rotation_floor);
+
+    RobustProcessDiagnostic diagnostic;
+    diagnostic.valid = true;
+    diagnostic.scale_ready = robust_process_scale_initialized_;
+    diagnostic.interval_s = dt;
+    diagnostic.translation_q_hat = translation_q_hat;
+    diagnostic.rotation_q_hat = rotation_q_hat;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    diagnostic.translation_q_used = nan;
+    diagnostic.translation_nis = nan;
+    diagnostic.translation_influence = nan;
+    diagnostic.rotation_q_used = nan;
+    diagnostic.rotation_nis = nan;
+    diagnostic.rotation_influence = nan;
+
+    if (robust_process_scale_initialized_)
+    {
+      diagnostic.translation_q_used =
+          std::exp(robust_process_translation_log_q_);
+      diagnostic.rotation_q_used =
+          std::exp(robust_process_rotation_log_q_);
+      diagnostic.translation_nis =
+          translation_energy / diagnostic.translation_q_used;
+      diagnostic.rotation_nis =
+          rotation_energy / diagnostic.rotation_q_used;
+      diagnostic.translation_influence =
+          1.0 / (1.0 + diagnostic.translation_nis / 6.0);
+      diagnostic.rotation_influence =
+          1.0 / (1.0 + diagnostic.rotation_nis / 6.0);
+    }
+
+    const double alpha = 1.0 - std::exp(
+        -dt / robust_process_scale_time_constant_s_);
+    if (!robust_process_scale_initialized_)
+    {
+      robust_process_translation_log_q_ = std::log(translation_q_hat);
+      robust_process_rotation_log_q_ = std::log(rotation_q_hat);
+      robust_process_scale_initialized_ = true;
+    }
+    else
+    {
+      robust_process_translation_log_q_ =
+          (1.0 - alpha) * robust_process_translation_log_q_ +
+          alpha * std::log(translation_q_hat);
+      robust_process_rotation_log_q_ =
+          (1.0 - alpha) * robust_process_rotation_log_q_ +
+          alpha * std::log(rotation_q_hat);
+    }
+    diagnostic.translation_q_next =
+        std::exp(robust_process_translation_log_q_);
+    diagnostic.rotation_q_next =
+        std::exp(robust_process_rotation_log_q_);
+    pending_robust_process_ = diagnostic;
+  }
+
+  void TrajectoryManager::WriteRobustProcessDiagnostic(
+      const ceres::Solver::Summary &summary,
+      double optimization_time_ms)
+  {
+    if (!pending_robust_process_.valid || !robust_process_stream_)
+      return;
+
+    std::vector<double> position_corrections;
+    std::vector<double> rotation_corrections;
+    const size_t active_count = std::min(
+        trajectory_->numKnots(), static_cast<size_t>(std::max(0, division_) + 3));
+    const size_t first_active = trajectory_->numKnots() - active_count;
+    for (size_t i = first_active; i < trajectory_->numKnots(); ++i)
+    {
+      if (i >= coarse_positions_.size() || i >= coarse_rotations_.size())
+        continue;
+      position_corrections.push_back(
+          (trajectory_->getKnotPos(i) - coarse_positions_[i]).norm());
+      rotation_corrections.push_back(
+          (coarse_rotations_[i].inverse() * trajectory_->getKnotSO3(i))
+              .log().norm());
+    }
+    const auto median = [](std::vector<double> values) {
+      if (values.empty())
+        return std::numeric_limits<double>::quiet_NaN();
+      std::sort(values.begin(), values.end());
+      const size_t middle = values.size() / 2;
+      return values.size() % 2 == 0
+                 ? 0.5 * (values[middle - 1] + values[middle])
+                 : values[middle];
+    };
+    const auto maximum = [](const std::vector<double> &values) {
+      return values.empty()
+                 ? std::numeric_limits<double>::quiet_NaN()
+                 : *std::max_element(values.begin(), values.end());
+    };
+    const auto minimum = [](const std::vector<double> &values) {
+      return values.empty()
+                 ? std::numeric_limits<double>::quiet_NaN()
+                 : *std::min_element(values.begin(), values.end());
+    };
+
+    int translation_projection_valid = 0;
+    int rotation_projection_valid = 0;
+    std::vector<double> translation_projection_weights;
+    std::vector<double> translation_relative_information;
+    std::vector<double> rotation_projection_weights;
+    std::vector<double> rotation_relative_information;
+    for (const ProcessProjection &projection :
+         pending_process_projection_.projections)
+    {
+      if (projection.translation.success)
+      {
+        ++translation_projection_valid;
+        translation_projection_weights.insert(
+            translation_projection_weights.end(),
+            projection.translation.weights.data(),
+            projection.translation.weights.data() + 6);
+        translation_relative_information.insert(
+            translation_relative_information.end(),
+            projection.translation.relative_information.data(),
+            projection.translation.relative_information.data() + 6);
+      }
+      if (projection.rotation.success)
+      {
+        ++rotation_projection_valid;
+        rotation_projection_weights.insert(
+            rotation_projection_weights.end(),
+            projection.rotation.weights.data(),
+            projection.rotation.weights.data() + 6);
+        rotation_relative_information.insert(
+            rotation_relative_information.end(),
+            projection.rotation.relative_information.data(),
+            projection.rotation.relative_information.data() + 6);
+      }
+    }
+
+    const double data_start_time_s =
+        trajectory_->GetDataStartTime() * NS_TO_S;
+    const RobustProcessDiagnostic &diagnostic = pending_robust_process_;
+    const int iterations =
+        summary.num_successful_steps + summary.num_unsuccessful_steps;
+    robust_process_stream_
+        << robust_process_window_index_++ << ','
+        << data_start_time_s + opt_min_t_ns * NS_TO_S << ','
+        << data_start_time_s + opt_max_t_ns * NS_TO_S << ','
+        << diagnostic.valid << ',' << diagnostic.scale_ready << ','
+        << diagnostic.interval_s << ',' << diagnostic.translation_q_hat << ','
+        << diagnostic.translation_q_used << ','
+        << diagnostic.translation_q_next << ','
+        << diagnostic.translation_nis << ','
+        << diagnostic.translation_nis / 6.0 << ','
+        << diagnostic.translation_influence << ','
+        << diagnostic.rotation_q_hat << ','
+        << diagnostic.rotation_q_used << ','
+        << diagnostic.rotation_q_next << ',' << diagnostic.rotation_nis << ','
+        << diagnostic.rotation_nis / 6.0 << ','
+        << diagnostic.rotation_influence << ','
+        << pending_camera_risk_.valid << ','
+        << pending_camera_risk_.factor_blocks << ','
+        << pending_camera_risk_.influence_mean << ','
+        << pending_camera_risk_.risk << ','
+        << pending_camera_risk_.computation_time_ms << ','
+        << robust_process_risk_scaling_enabled_ << ','
+        << CurrentRobustProcessCostScale() << ','
+        << robust_process_projection_diagnostics_enabled_ << ','
+        << pending_process_projection_.success << ','
+        << pending_process_projection_.computation_time_ms << ','
+        << pending_process_projection_.residual_count << ','
+        << pending_process_projection_.state_dimension << ','
+        << pending_process_projection_.projections.size() << ','
+        << translation_projection_valid << ','
+        << minimum(translation_projection_weights) << ','
+        << median(translation_projection_weights) << ','
+        << maximum(translation_projection_weights) << ','
+        << minimum(translation_relative_information) << ','
+        << median(translation_relative_information) << ','
+        << maximum(translation_relative_information) << ','
+        << rotation_projection_valid << ','
+        << minimum(rotation_projection_weights) << ','
+        << median(rotation_projection_weights) << ','
+        << maximum(rotation_projection_weights) << ','
+        << minimum(rotation_relative_information) << ','
+        << median(rotation_relative_information) << ','
+        << maximum(rotation_relative_information) << ','
+        << median(position_corrections) << ','
+        << maximum(position_corrections) << ','
+        << median(rotation_corrections) << ','
+        << maximum(rotation_corrections) << ','
+        << summary.IsSolutionUsable() << ',' << summary.initial_cost << ','
+        << summary.final_cost << ',' << iterations << ','
+        << summary.num_successful_steps << ','
+        << summary.num_unsuccessful_steps << ',' << optimization_time_ms << '\n';
+    robust_process_stream_.flush();
   }
 
   TrajectoryManager::ImuExcitation TrajectoryManager::ComputeImuExcitation(
@@ -866,6 +1241,7 @@ namespace cocolic
 
     ceres::Solver::Summary summary = estimator->Solve(50, false);
     CaptureCoarseControlPoints();
+    PrepareRobustProcessDiagnostic();
     static int init_cnt = 0;
     init_cnt++;
     // LOG(INFO) << init_cnt << " TrajInitSolver " << summary.BriefReport();
@@ -914,6 +1290,10 @@ namespace cocolic
     option.show_residual_summary = verbose;
     option.collect_observability_diagnostics =
         lidar_iter == 0 && !observability_output_dir_.empty();
+    option.collect_camera_robust_risk =
+        lidar_iter == 0 &&
+        (robust_process_risk_scaling_enabled_ ||
+         !robust_process_output_dir_.empty());
     if (lidar_iter == 0)
       pending_observability_valid_ = false;
     TrajectoryEstimator::Ptr estimator(
@@ -933,7 +1313,6 @@ namespace cocolic
                                           lidar_marg_parameter_blocks);
       prior_factor_count = 1;
     }
-
     // [1] lidar factor
     SO3d S_LtoI = trajectory_->GetSensorEP(LiDARSensor).so3;
     Eigen::Vector3d p_LinI = trajectory_->GetSensorEP(LiDARSensor).p;
@@ -1025,6 +1404,13 @@ namespace cocolic
       process_cur_img_ = false;
     }
 
+    if (option.collect_camera_robust_risk)
+      pending_camera_risk_ = estimator->ComputeCameraRobustRisk();
+
+    // The first-iteration camera risk is frozen for all refinements and the
+    // marginalization prior produced from this window.
+    prior_factor_count += AddCurrentRobustProcessFactors(*estimator);
+
     if (option.collect_observability_diagnostics)
     {
       pending_observability_ =
@@ -1054,6 +1440,7 @@ namespace cocolic
                                    imu_factor_count, camera_factor_count,
                                    prior_factor_count, opt_time);
       WriteObservabilityDiagnostics(summary, opt_time);
+      WriteRobustProcessDiagnostic(summary, opt_time);
     }
 
     // LOG(INFO) << "[gyro_bias_new] " << all_imu_bias_.rbegin()->second.gyro_bias.x() << " "
@@ -1126,6 +1513,60 @@ namespace cocolic
         ResidualBlockInfo *residual_block_info = new ResidualBlockInfo(RType_Prior, cost_function, NULL,
                                                                        lidar_marg_parameter_blocks, drop_set);
         marginalization_info->addResidualBlockInfo(residual_block_info);
+      }
+    }
+
+    // Robust WNOA factors that constrain the spline segments added this window.
+    const double process_cost_scale = CurrentRobustProcessCostScale();
+    const std::vector<size_t> robust_process_supports =
+        robust_process_prior_enabled_ && process_cost_scale > 0.0
+            ? CurrentRobustProcessSupportStarts()
+            : std::vector<size_t>();
+    for (size_t support_start : robust_process_supports)
+    {
+      if (robust_process_translation_enabled_)
+      {
+        std::vector<double *> position_blocks;
+        estimator->AddControlPointsNURBS(
+            support_start, position_blocks, true);
+        std::vector<int> position_drop_set;
+        for (int i = 0; i < static_cast<int>(position_blocks.size()); ++i)
+        {
+          if (std::find(drop_param.begin(), drop_param.end(),
+                        position_blocks[i]) != drop_param.end())
+            position_drop_set.push_back(i);
+        }
+        ceres::CostFunction *translation_factor =
+            new analytic_derivative::RobustWnoaTranslationFactor(
+                *trajectory_, support_start,
+                pending_robust_process_.translation_q_used);
+        marginalization_info->addResidualBlockInfo(new ResidualBlockInfo(
+            RType_Prior, translation_factor,
+            analytic_derivative::robust_wnoa::MakeCauchyLoss(
+                process_cost_scale), position_blocks,
+            position_drop_set));
+      }
+
+      if (robust_process_rotation_enabled_)
+      {
+        std::vector<double *> rotation_blocks;
+        estimator->AddControlPointsNURBS(support_start, rotation_blocks);
+        std::vector<int> rotation_drop_set;
+        for (int i = 0; i < static_cast<int>(rotation_blocks.size()); ++i)
+        {
+          if (std::find(drop_param.begin(), drop_param.end(),
+                        rotation_blocks[i]) != drop_param.end())
+            rotation_drop_set.push_back(i);
+        }
+        ceres::CostFunction *rotation_factor =
+            new analytic_derivative::RobustWnoaRotationFactor(
+                *trajectory_, support_start,
+                pending_robust_process_.rotation_q_used);
+        marginalization_info->addResidualBlockInfo(new ResidualBlockInfo(
+            RType_Prior, rotation_factor,
+            analytic_derivative::robust_wnoa::MakeCauchyLoss(
+                process_cost_scale), rotation_blocks,
+            rotation_drop_set));
       }
     }
 

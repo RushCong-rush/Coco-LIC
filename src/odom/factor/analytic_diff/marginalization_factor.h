@@ -27,6 +27,8 @@
 
 const int NUM_THREADS = 4;
 
+void SetMarginalizationDeterministicMode(bool enabled);
+
 enum ResidualType {
   RType_Pose = 0,
   RType_IMU,
@@ -142,6 +144,10 @@ class MarginalizationInfo {
   // 
   // 
   std::unordered_map<long, int> parameter_block_idx;
+
+  // First-seen order is stable when deterministic experiment mode is enabled.
+  std::vector<long> parameter_block_order;
+  std::vector<long> drop_block_order;
 
   // 
   std::unordered_map<long, double *> parameter_block_data;

@@ -513,6 +513,70 @@ class So3SplineView {
     return rot_vel;
   }
 
+  static Vec3 VelocityBodyNURBS(
+      const std::pair<int, double>& su, double delta_t,
+      const Eigen::Matrix4d& cumulative_blending_matrix,
+      double const* const* knots, JacobianStruct* J = nullptr) {
+    VecN p;
+    baseCoeffsWithTime<0>(p, su.second);
+    const VecN coeff = cumulative_blending_matrix * p;
+    baseCoeffsWithTime<1>(p, su.second);
+    const VecN dcoeff = cumulative_blending_matrix * p / delta_t;
+
+    Vec3 delta_vec[DEG];
+    SO3 exp_k_delta_inv[DEG];
+    SO3 accum_inv;
+    Mat3 post_inv[N];
+    Mat3 jr_delta_inv[DEG];
+    Mat3 jr_kdelta[DEG];
+    post_inv[N - 1] = accum_inv.matrix();
+
+    for (int i = DEG - 1; i >= 0; --i) {
+      Eigen::Map<SO3 const> r0(knots[i]);
+      Eigen::Map<SO3 const> r1(knots[i + 1]);
+      delta_vec[i] = (r0.inverse() * r1).log();
+
+      const Vec3 k_delta = coeff[i + 1] * delta_vec[i];
+      exp_k_delta_inv[i] = SO3::exp(-k_delta);
+      accum_inv *= exp_k_delta_inv[i];
+
+      if (J) {
+        post_inv[i] = accum_inv.matrix();
+        Sophus::rightJacobianInvSO3(delta_vec[i], jr_delta_inv[i]);
+        Sophus::rightJacobianSO3(-k_delta, jr_kdelta[i]);
+      }
+    }
+
+    Vec3 omega[N];
+    omega[0].setZero();
+    for (int i = 0; i < DEG; ++i) {
+      omega[i + 1] = exp_k_delta_inv[i] * omega[i]
+                     + dcoeff[i + 1] * delta_vec[i];
+    }
+
+    if (J) {
+      J->start_idx = 0;
+      for (int i = 0; i < N; ++i) J->d_val_d_knot[i].setZero();
+
+      Mat3 d_omega_d_delta[DEG];
+      d_omega_d_delta[0] = dcoeff[1] * post_inv[1];
+      for (int i = 1; i < DEG; ++i) {
+        d_omega_d_delta[i] =
+            coeff[i + 1] * post_inv[i] * SO3::hat(omega[i])
+                * jr_kdelta[i]
+            + dcoeff[i + 1] * post_inv[i + 1];
+      }
+
+      for (int i = 0; i < DEG; ++i) {
+        J->d_val_d_knot[i] -=
+            d_omega_d_delta[i] * jr_delta_inv[i].transpose();
+        J->d_val_d_knot[i + 1] +=
+            d_omega_d_delta[i] * jr_delta_inv[i];
+      }
+    }
+    return omega[N - 1];
+  }
+
   static Vec3 accelerationBody(const int64_t time_ns,
                                const SplineSegmentMeta<N>& splne_meta,
                                double const* const* knots) {

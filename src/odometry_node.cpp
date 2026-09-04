@@ -19,6 +19,9 @@
 #include <ros/package.h>
 #include <ros/ros.h>
 
+#include <cstdlib>
+#include <opencv2/core.hpp>
+
 #include <odom/odometry_manager.h>
 
 using namespace cocolic;
@@ -28,6 +31,18 @@ int main(int argc, char **argv) {
 
   ros::init(argc, argv, "cocolic");
   ros::NodeHandle nh("~");
+
+  bool deterministic_experiment;
+  int random_seed;
+  nh.param<bool>("deterministic_experiment", deterministic_experiment, false);
+  nh.param<int>("random_seed", random_seed, 0);
+  if (deterministic_experiment) {
+    std::srand(random_seed);
+    cv::setRNGSeed(random_seed);
+    cv::setNumThreads(1);
+    Eigen::setNbThreads(1);
+    ROS_INFO("Deterministic experiment mode enabled (seed=%d).", random_seed);
+  }
 
   std::string config_path;
   nh.param<std::string>("config_path", config_path, "ct_odometry.yaml");

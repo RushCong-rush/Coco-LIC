@@ -47,6 +47,10 @@ namespace cocolic
     std::string cam_yaml = config_path + node["camera_yaml"].as<std::string>();
     YAML::Node cam_node = YAML::LoadFile(cam_yaml);
 
+    bool deterministic_experiment = false;
+    nh.param<bool>("deterministic_experiment", deterministic_experiment, false);
+    SetMarginalizationDeterministicMode(deterministic_experiment);
+
     odometry_mode_ = OdometryMode(node["odometry_mode"].as<int>());
     std::cout << "\n🥥 Odometry Mode: ";
     if (odometry_mode_ == LICO)
@@ -90,7 +94,8 @@ namespace cocolic
     gravity_norm_ = imu_initializer_->GetGravity().norm();
 
     // camera
-    camera_handler_ = std::make_shared<R3LIVE>(cam_node, EP_CtoI);
+    camera_handler_ = std::make_shared<R3LIVE>(cam_node, EP_CtoI,
+                                               deterministic_experiment);
     t_begin_add_cam_ = node["t_begin_add_cam"].as<double>() * S_TO_NS;
     enable_visual_constraints_ =
         node["enable_visual_constraints"] ? node["enable_visual_constraints"].as<bool>() : true;
@@ -127,6 +132,40 @@ namespace cocolic
                           observability_output_dir, "");
     trajectory_manager_->ConfigureObservabilityDiagnostics(
         observability_output_dir);
+    std::string robust_process_output_dir;
+    double robust_process_scale_time_constant_s;
+    nh.param<std::string>("robust_process_output_dir",
+                          robust_process_output_dir, "");
+    nh.param<double>("robust_process_scale_time_constant_s",
+                     robust_process_scale_time_constant_s, 1.0);
+    trajectory_manager_->ConfigureRobustProcessDiagnostics(
+        robust_process_output_dir,
+        robust_process_scale_time_constant_s);
+    bool enable_robust_process_prior = false;
+    nh.param<bool>("enable_robust_process_prior",
+                   enable_robust_process_prior, false);
+    trajectory_manager_->SetRobustProcessPriorEnabled(
+        enable_robust_process_prior);
+    bool enable_robust_process_translation = true;
+    nh.param<bool>("enable_robust_process_translation",
+                   enable_robust_process_translation, true);
+    trajectory_manager_->SetRobustProcessTranslationEnabled(
+        enable_robust_process_translation);
+    bool enable_robust_process_rotation = true;
+    nh.param<bool>("enable_robust_process_rotation",
+                   enable_robust_process_rotation, true);
+    trajectory_manager_->SetRobustProcessRotationEnabled(
+        enable_robust_process_rotation);
+    bool enable_robust_process_projection_diagnostics = false;
+    nh.param<bool>("enable_robust_process_projection_diagnostics",
+                   enable_robust_process_projection_diagnostics, false);
+    trajectory_manager_->SetRobustProcessProjectionDiagnosticsEnabled(
+        enable_robust_process_projection_diagnostics);
+    bool enable_robust_process_risk_scaling = false;
+    nh.param<bool>("enable_robust_process_risk_scaling",
+                   enable_robust_process_risk_scaling, false);
+    trajectory_manager_->SetRobustProcessRiskScalingEnabled(
+        enable_robust_process_risk_scaling);
 
     int division_coarse = node["division_coarse"].as<int>();
     cp_add_num_coarse_ = division_coarse;

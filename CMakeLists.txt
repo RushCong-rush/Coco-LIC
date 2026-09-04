@@ -147,4 +147,10 @@ if(CATKIN_ENABLE_TESTING)
   add_executable(erp_visual_residual_test tests/test_erp_visual_residual.cpp)
   target_link_libraries(erp_visual_residual_test ${catkin_LIBRARIES})
   add_test(NAME erp_visual_residual_test COMMAND erp_visual_residual_test)
+  add_executable(robust_wnoa_process_factor_test
+                 tests/test_robust_wnoa_process_factor.cpp)
+  target_link_libraries(robust_wnoa_process_factor_test
+                        ${thirdparty_libraries})
+  add_test(NAME robust_wnoa_process_factor_test
+           COMMAND robust_wnoa_process_factor_test)
 endif()

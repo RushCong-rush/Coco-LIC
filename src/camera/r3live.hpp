@@ -326,7 +326,11 @@ public:
 
     bool sync_packages(MeasureGroup &meas);
     
-    R3LIVE(const YAML::Node &node, const cocolic::ExtrinsicParam &EP_CtoI)
+    R3LIVE(const YAML::Node &node, const cocolic::ExtrinsicParam &EP_CtoI,
+           bool deterministic_experiment = false)
+        : op_track(deterministic_experiment),
+          m_map_rgb_pts(deterministic_experiment ? 0 : 1,
+                        deterministic_experiment)
     {
         cam_init = false;
         
@@ -471,7 +475,7 @@ public:
         //     cout << ANSI_COLOR_BLUE_BOLD << "Create r3live output dir: " << m_map_output_dir << ANSI_COLOR_RESET << endl;
         //     Common_tools::create_dir(m_map_output_dir);
         // }
-        m_thread_pool_ptr = std::make_shared<Common_tools::ThreadPool>(6, true, false); // At least 5 threads are needs, here we allocate 6 threads.
+        m_thread_pool_ptr = std::make_shared<Common_tools::ThreadPool>(deterministic_experiment ? 1 : 6, true, false); // At least 5 threads are needs, here we allocate 6 threads.
         // g_cost_time_logger.init_log( std::string(m_map_output_dir).append("/cost_time_logger.log"));
         m_map_rgb_pts.set_minmum_dis(m_minumum_rgb_pts_size);
         m_map_rgb_pts.m_recent_visited_voxel_activated_time = m_recent_visited_voxel_activated_time;

@@ -32,6 +32,7 @@
 #include <chrono>
 #include <memory>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <variant>
 
@@ -168,6 +169,42 @@ namespace cocolic
     }
   }
 
+  void TrajectoryEstimator::AddRobustWnoaProcessFactors(
+      size_t support_start, double translation_spectral_density,
+      double rotation_spectral_density,
+      const Eigen::Matrix<double, 6, 6> &translation_sqrt_weight,
+      const Eigen::Matrix<double, 6, 6> &rotation_sqrt_weight,
+      bool add_translation, bool add_rotation, double robust_cost_scale)
+  {
+    if (add_translation)
+    {
+      std::vector<double *> position_blocks;
+      AddControlPointsNURBS(support_start, position_blocks, true);
+      ceres::CostFunction *translation_factor =
+          new analytic_derivative::RobustWnoaTranslationFactor(
+              *trajectory_, support_start, translation_spectral_density,
+              translation_sqrt_weight);
+      problem_->AddResidualBlock(
+          translation_factor,
+          analytic_derivative::robust_wnoa::MakeCauchyLoss(robust_cost_scale),
+          position_blocks);
+    }
+
+    if (add_rotation)
+    {
+      std::vector<double *> rotation_blocks;
+      AddControlPointsNURBS(support_start, rotation_blocks);
+      ceres::CostFunction *rotation_factor =
+          new analytic_derivative::RobustWnoaRotationFactor(
+              *trajectory_, support_start, rotation_spectral_density,
+              rotation_sqrt_weight);
+      problem_->AddResidualBlock(
+          rotation_factor,
+          analytic_derivative::robust_wnoa::MakeCauchyLoss(robust_cost_scale),
+          rotation_blocks);
+    }
+  }
+
   void TrajectoryEstimator::AddMarginalizationFactor(
       MarginalizationInfo::Ptr &last_marginalization_info,
       std::vector<double *> &last_marginalization_parameter_blocks)
@@ -291,6 +328,8 @@ namespace cocolic
     ceres::ResidualBlockId residual_block =
         problem_->AddResidualBlock(cost_function, loss_function, vec);
     if (options.collect_observability_diagnostics)
+      camera_residual_blocks_.push_back(residual_block);
+    else if (options.collect_camera_robust_risk)
       camera_residual_blocks_.push_back(residual_block);
   }
 
@@ -705,6 +744,205 @@ namespace cocolic
     result.camera = ComputeSensorObservability(
         camera_residual_blocks_, 2, kPnpCauchyLossScale);
     result.success = result.lidar.success || result.camera.success;
+    result.computation_time_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count();
+    return result;
+  }
+
+  CameraRobustRisk TrajectoryEstimator::ComputeCameraRobustRisk() const
+  {
+    CameraRobustRisk result;
+    result.factor_blocks = camera_residual_blocks_.size();
+    if (camera_residual_blocks_.empty())
+      return result;
+
+    const auto start = std::chrono::steady_clock::now();
+    ceres::Problem::EvaluateOptions options;
+    options.apply_loss_function = false;
+    options.num_threads = 1;
+    options.residual_blocks = camera_residual_blocks_;
+    double cost = 0.0;
+    std::vector<double> residuals;
+    const bool evaluated = problem_->Evaluate(
+        options, &cost, &residuals, nullptr, nullptr);
+    if (evaluated && residuals.size() == 2 * camera_residual_blocks_.size())
+    {
+      const double scale_squared =
+          kPnpCauchyLossScale * kPnpCauchyLossScale;
+      double influence_sum = 0.0;
+      for (size_t block = 0; block < camera_residual_blocks_.size(); ++block)
+      {
+        const double x = residuals[2 * block];
+        const double y = residuals[2 * block + 1];
+        influence_sum += 1.0 / (1.0 + (x * x + y * y) / scale_squared);
+      }
+      result.valid = true;
+      result.influence_mean =
+          influence_sum / camera_residual_blocks_.size();
+      result.risk = 1.0 - result.influence_mean;
+    }
+    result.computation_time_ms =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count();
+    return result;
+  }
+
+  ProcessProjectionResult
+  TrajectoryEstimator::ComputeRobustProcessProjections(
+      const std::vector<size_t> &support_starts,
+      double translation_spectral_density,
+      double rotation_spectral_density)
+  {
+    ProcessProjectionResult result;
+    const auto start = std::chrono::steady_clock::now();
+    if (support_starts.empty())
+      return result;
+
+    for (size_t support_start : support_starts)
+    {
+      std::vector<double *> blocks;
+      AddControlPointsNURBS(support_start, blocks, true);
+      blocks.clear();
+      AddControlPointsNURBS(support_start, blocks);
+    }
+
+    std::vector<double *> parameter_blocks;
+    problem_->GetParameterBlocks(&parameter_blocks);
+    parameter_blocks.erase(
+        std::remove_if(parameter_blocks.begin(), parameter_blocks.end(),
+                       [this](double *block) {
+                         return problem_->IsParameterBlockConstant(block);
+                       }),
+        parameter_blocks.end());
+    if (parameter_blocks.empty())
+      return result;
+
+    ceres::Problem::EvaluateOptions options;
+    options.apply_loss_function = true;
+    options.num_threads = 1;
+    options.parameter_blocks = parameter_blocks;
+    double cost = 0.0;
+    ceres::CRSMatrix sparse_jacobian;
+    if (!problem_->Evaluate(options, &cost, nullptr, nullptr,
+                            &sparse_jacobian) ||
+        sparse_jacobian.num_rows == 0 || sparse_jacobian.num_cols == 0)
+      return result;
+
+    Eigen::MatrixXd measurement_jacobian = Eigen::MatrixXd::Zero(
+        sparse_jacobian.num_rows, sparse_jacobian.num_cols);
+    for (int row = 0; row < sparse_jacobian.num_rows; ++row)
+    {
+      for (int entry = sparse_jacobian.rows[row];
+           entry < sparse_jacobian.rows[row + 1]; ++entry)
+      {
+        measurement_jacobian(row, sparse_jacobian.cols[entry]) =
+            sparse_jacobian.values[entry];
+      }
+    }
+    const Eigen::MatrixXd baseline_information =
+        measurement_jacobian.transpose() * measurement_jacobian;
+    if (!baseline_information.allFinite())
+      return result;
+
+    std::unordered_map<double *, int> parameter_offsets;
+    int offset = 0;
+    for (double *block : parameter_blocks)
+    {
+      parameter_offsets[block] = offset;
+      offset += problem_->ParameterBlockLocalSize(block);
+    }
+    if (offset != sparse_jacobian.num_cols)
+      return result;
+
+    const auto copy_projection = [](
+        const process_information_projection::Result &source) {
+      ProcessProjectionChannel destination;
+      destination.success = source.success;
+      destination.process_rank = source.process_rank;
+      destination.sqrt_weight = source.sqrt_weight;
+      destination.relative_information = source.relative_information;
+      destination.weights = source.weights;
+      return destination;
+    };
+
+    result.residual_count = sparse_jacobian.num_rows;
+    result.state_dimension = sparse_jacobian.num_cols;
+    result.projections.reserve(support_starts.size());
+    bool all_successful = true;
+    for (size_t support_start : support_starts)
+    {
+      ProcessProjection projection;
+      projection.support_start = support_start;
+
+      std::vector<double *> position_blocks;
+      AddControlPointsNURBS(support_start, position_blocks, true);
+      analytic_derivative::RobustWnoaTranslationFactor translation_factor(
+          *trajectory_, support_start, translation_spectral_density);
+      std::array<double const *, 4> position_parameters;
+      std::array<Eigen::Matrix<double, 6, 3, Eigen::RowMajor>, 4>
+          position_jacobians;
+      std::array<double *, 4> position_jacobian_data;
+      for (int i = 0; i < 4; ++i)
+      {
+        position_parameters[i] = position_blocks[i];
+        position_jacobian_data[i] = position_jacobians[i].data();
+      }
+      Eigen::Matrix<double, 6, 1> process_residual;
+      Eigen::MatrixXd translation_jacobian = Eigen::MatrixXd::Zero(
+          6, result.state_dimension);
+      if (translation_factor.Evaluate(
+              position_parameters.data(), process_residual.data(),
+              position_jacobian_data.data()))
+      {
+        for (int i = 0; i < 4; ++i)
+        {
+          const auto found = parameter_offsets.find(position_blocks[i]);
+          if (found != parameter_offsets.end())
+            translation_jacobian.middleCols<3>(found->second) =
+                position_jacobians[i];
+        }
+        projection.translation = copy_projection(
+            process_information_projection::Compute(
+                baseline_information, translation_jacobian));
+      }
+
+      std::vector<double *> rotation_blocks;
+      AddControlPointsNURBS(support_start, rotation_blocks);
+      analytic_derivative::RobustWnoaRotationFactor rotation_factor(
+          *trajectory_, support_start, rotation_spectral_density);
+      std::array<double const *, 4> rotation_parameters;
+      std::array<Eigen::Matrix<double, 6, 4, Eigen::RowMajor>, 4>
+          rotation_jacobians;
+      std::array<double *, 4> rotation_jacobian_data;
+      for (int i = 0; i < 4; ++i)
+      {
+        rotation_parameters[i] = rotation_blocks[i];
+        rotation_jacobian_data[i] = rotation_jacobians[i].data();
+      }
+      Eigen::MatrixXd rotation_jacobian = Eigen::MatrixXd::Zero(
+          6, result.state_dimension);
+      if (rotation_factor.Evaluate(
+              rotation_parameters.data(), process_residual.data(),
+              rotation_jacobian_data.data()))
+      {
+        for (int i = 0; i < 4; ++i)
+        {
+          const auto found = parameter_offsets.find(rotation_blocks[i]);
+          if (found != parameter_offsets.end())
+            rotation_jacobian.middleCols<3>(found->second) =
+                rotation_jacobians[i].leftCols<3>();
+        }
+        projection.rotation = copy_projection(
+            process_information_projection::Compute(
+                baseline_information, rotation_jacobian));
+      }
+
+      all_successful = all_successful && projection.translation.success
+          && projection.rotation.success;
+      result.projections.push_back(projection);
+    }
+    result.success = all_successful && !result.projections.empty();
     result.computation_time_ms =
         std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - start).count();

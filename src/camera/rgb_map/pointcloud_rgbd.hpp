@@ -157,6 +157,7 @@ struct Global_map
 {
     int                                                          m_map_major_version = R3LIVE_MAP_MAJOR_VERSION;
     int                                                          m_map_minor_version = R3LIVE_MAP_MINOR_VERSION;
+    bool                                                         m_deterministic_order = false;
     int                                                          m_if_get_all_pts_in_boxes_using_mp = 1;
     std::vector< RGB_pt_ptr >                    m_rgb_pts_vec;
     // std::vector< RGB_pt_ptr >                    m_rgb_pts_in_recent_visited_voxels;
@@ -188,7 +189,7 @@ struct Global_map
     void                                     clear_map();
     void set_minmum_dis( double minimum_dis );
 
-    Global_map( int if_start_service = 1 );
+    Global_map( int if_start_service = 1, bool deterministic_order = false );
     ~Global_map();
 
     void service_refresh_pts_for_projection();

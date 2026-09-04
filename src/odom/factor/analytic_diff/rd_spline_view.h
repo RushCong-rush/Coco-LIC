@@ -111,6 +111,25 @@ class RdSplineView {
     return res;
   }
 
+  static VecD velocityNURBS(const std::pair<int, double>& su,
+                            double delta_t,
+                            const Eigen::Matrix4d& blending_matrix,
+                            double const* const* knots,
+                            JacobianStruct* J = nullptr) {
+    VecN p;
+    baseCoeffsWithTimeR3<1>(p, su.second);
+    const VecN coeff = blending_matrix * p / delta_t;
+
+    VecD result = VecD::Zero();
+    for (int i = 0; i < N; ++i) {
+      Eigen::Map<VecD const> knot(knots[i]);
+      result += coeff[i] * knot;
+      if (J) J->d_val_d_knot[i] = coeff[i];
+    }
+    if (J) J->start_idx = 0;
+    return result;
+  }
+
   /// @brief Alias for first derivative of spline. See \ref evaluate.
   static VecD velocity(const int64_t time_ns,
                        const SplineSegmentMeta<N>& splne_meta,

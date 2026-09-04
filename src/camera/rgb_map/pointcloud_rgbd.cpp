@@ -165,7 +165,8 @@ void Global_map::set_minmum_dis(double minimum_dis)
     m_minimum_pts_size = minimum_dis;
 }
 
-Global_map::Global_map( int if_start_service )
+Global_map::Global_map( int if_start_service, bool deterministic_order )
+    : m_deterministic_order( deterministic_order )
 {
     m_mutex_pts_vec = std::make_shared< std::mutex >();
     m_mutex_img_pose_for_projection = std::make_shared< std::mutex >();
@@ -672,6 +673,15 @@ void Global_map::selection_points_for_projection( bool is_3dgs, Eigen::aligned_v
     else
     {
         pts_for_projection = m_rgb_pts_vec;  //
+    }
+
+    if (m_deterministic_order)
+    {
+        std::sort(pts_for_projection.begin(), pts_for_projection.end(),
+                  [](const RGB_pt_ptr &lhs, const RGB_pt_ptr &rhs)
+                  {
+                      return lhs->m_pt_index < rhs->m_pt_index;
+                  });
     }
 
     ///

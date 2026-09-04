@@ -36,6 +36,8 @@
 #include <odom/factor/analytic_diff/image_feature_factor.h>
 #include <odom/factor/analytic_diff/lidar_feature_factor.h>
 #include <odom/factor/analytic_diff/marginalization_factor.h>
+#include <odom/factor/analytic_diff/process_information_projection.h>
+#include <odom/factor/analytic_diff/robust_wnoa_process_factor.h>
 #include <odom/factor/analytic_diff/trajectory_value_factor.h>
 
 namespace cocolic
@@ -105,6 +107,49 @@ namespace cocolic
     double computation_time_ms = 0.0;
     SensorObservability lidar;
     SensorObservability camera;
+  };
+
+  struct CameraRobustRisk
+  {
+    bool valid = false;
+    int factor_blocks = 0;
+    double influence_mean = std::numeric_limits<double>::quiet_NaN();
+    double risk = 0.0;
+    double computation_time_ms = 0.0;
+  };
+
+  struct ProcessProjectionChannel
+  {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    bool success = false;
+    int process_rank = 0;
+    Eigen::Matrix<double, 6, 6> sqrt_weight =
+        Eigen::Matrix<double, 6, 6>::Zero();
+    Eigen::Matrix<double, 6, 1> relative_information =
+        Eigen::Matrix<double, 6, 1>::Zero();
+    Eigen::Matrix<double, 6, 1> weights =
+        Eigen::Matrix<double, 6, 1>::Zero();
+  };
+
+  struct ProcessProjection
+  {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    size_t support_start = 0;
+    ProcessProjectionChannel translation;
+    ProcessProjectionChannel rotation;
+  };
+
+  struct ProcessProjectionResult
+  {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    bool success = false;
+    int residual_count = 0;
+    int state_dimension = 0;
+    double computation_time_ms = 0.0;
+    Eigen::aligned_vector<ProcessProjection> projections;
   };
 
   struct ResidualSummary
@@ -373,6 +418,13 @@ namespace cocolic
 
     CausalObservabilityDiagnostics ComputeCausalObservabilityDiagnostics();
 
+    CameraRobustRisk ComputeCameraRobustRisk() const;
+
+    ProcessProjectionResult ComputeRobustProcessProjections(
+        const std::vector<size_t> &support_starts,
+        double translation_spectral_density,
+        double rotation_spectral_density);
+
     void PrepareMarginalizationInfo(ResidualType r_type,
                                     ceres::CostFunction *cost_function,
                                     ceres::LossFunction *loss_function,
@@ -392,6 +444,14 @@ namespace cocolic
 
     void AddControlPointsNURBS(size_t start_idx1, size_t start_idx2,
                                std::vector<double *> &vec, bool addPosKnot = false);
+
+    void AddRobustWnoaProcessFactors(
+        size_t support_start, double translation_spectral_density,
+        double rotation_spectral_density,
+        const Eigen::Matrix<double, 6, 6> &translation_sqrt_weight,
+        const Eigen::Matrix<double, 6, 6> &rotation_sqrt_weight,
+        bool add_translation = true, bool add_rotation = true,
+        double robust_cost_scale = 1.0);
 
   private:
     void AddControlPoints(const SplineMeta<SplineOrder> &spline_meta,
