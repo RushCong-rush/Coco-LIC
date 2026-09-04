@@ -2,7 +2,7 @@ imu_topic: /m3dgr/mid360/imu
 
 imu_excite_threshold: 0.5
 gravity_mag: 9.81
-if_normalized: false
+if_normalized: true  # MID-360 acceleration in M3DGR is recorded in g.
 if_use_init_bg: false
 
 IMUExtrinsics:
