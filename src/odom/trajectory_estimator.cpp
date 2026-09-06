@@ -174,14 +174,19 @@ namespace cocolic
       double rotation_spectral_density,
       const Eigen::Matrix<double, 6, 6> &translation_sqrt_weight,
       const Eigen::Matrix<double, 6, 6> &rotation_sqrt_weight,
-      bool add_translation, bool add_rotation, double robust_cost_scale)
+      bool add_translation, bool add_rotation, double robust_cost_scale,
+      bool translation_wnoj)
   {
     if (add_translation)
     {
       std::vector<double *> position_blocks;
       AddControlPointsNURBS(support_start, position_blocks, true);
-      ceres::CostFunction *translation_factor =
-          new analytic_derivative::RobustWnoaTranslationFactor(
+      ceres::CostFunction *translation_factor;
+      if (translation_wnoj)
+        translation_factor = new analytic_derivative::WnojTranslationFactor(
+            *trajectory_, support_start, translation_spectral_density);
+      else
+        translation_factor = new analytic_derivative::RobustWnoaTranslationFactor(
               *trajectory_, support_start, translation_spectral_density,
               translation_sqrt_weight);
       problem_->AddResidualBlock(

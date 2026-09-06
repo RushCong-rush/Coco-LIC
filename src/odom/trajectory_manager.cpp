@@ -357,7 +357,8 @@ namespace cocolic
           pending_robust_process_.rotation_q_used,
           translation_sqrt_weight, rotation_sqrt_weight,
           robust_process_translation_enabled_,
-          robust_process_rotation_enabled_, process_cost_scale);
+          robust_process_rotation_enabled_, process_cost_scale,
+          robust_process_translation_wnoj_);
       factor_count += static_cast<int>(robust_process_translation_enabled_);
       factor_count += static_cast<int>(robust_process_rotation_enabled_);
     }
@@ -534,9 +535,18 @@ namespace cocolic
       }
       return energy;
     };
-    const double translation_energy = process_energy(translation_error);
+    double translation_energy = process_energy(translation_error);
     const double rotation_energy = process_energy(rotation_error);
-    const double translation_floor = opt_weight_.imu_noise.sigma_a_2;
+    double translation_floor = opt_weight_.imu_noise.sigma_a_2;
+    if (robust_process_translation_wnoj_)
+    {
+      translation_energy = analytic_derivative::WnojTranslationEnergy(
+          translation_error.head<3>() - 0.5 * dt * dt * origin.linear_acceleration,
+          translation_error.tail<3>() - dt * origin.linear_acceleration,
+          target.linear_acceleration - origin.linear_acceleration, dt);
+      // Match the WNOA floor's velocity increment variance over this window.
+      translation_floor *= 3.0 / (dt * dt);
+    }
     const double rotation_floor =
         opt_weight_.imu_noise.sigma_w_2 / (dt * dt);
     const double translation_q_hat = std::max(
@@ -1536,8 +1546,13 @@ namespace cocolic
                         position_blocks[i]) != drop_param.end())
             position_drop_set.push_back(i);
         }
-        ceres::CostFunction *translation_factor =
-            new analytic_derivative::RobustWnoaTranslationFactor(
+        ceres::CostFunction *translation_factor;
+        if (robust_process_translation_wnoj_)
+          translation_factor = new analytic_derivative::WnojTranslationFactor(
+              *trajectory_, support_start,
+              pending_robust_process_.translation_q_used);
+        else
+          translation_factor = new analytic_derivative::RobustWnoaTranslationFactor(
                 *trajectory_, support_start,
                 pending_robust_process_.translation_q_used);
         marginalization_info->addResidualBlockInfo(new ResidualBlockInfo(

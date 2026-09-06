@@ -38,6 +38,7 @@
 #include <odom/factor/analytic_diff/marginalization_factor.h>
 #include <odom/factor/analytic_diff/process_information_projection.h>
 #include <odom/factor/analytic_diff/robust_wnoa_process_factor.h>
+#include <odom/factor/analytic_diff/wnoj_translation_factor.h>
 #include <odom/factor/analytic_diff/trajectory_value_factor.h>
 
 namespace cocolic
@@ -451,7 +452,7 @@ namespace cocolic
         const Eigen::Matrix<double, 6, 6> &translation_sqrt_weight,
         const Eigen::Matrix<double, 6, 6> &rotation_sqrt_weight,
         bool add_translation = true, bool add_rotation = true,
-        double robust_cost_scale = 1.0);
+        double robust_cost_scale = 1.0, bool translation_wnoj = false);
 
   private:
     void AddControlPoints(const SplineMeta<SplineOrder> &spline_meta,

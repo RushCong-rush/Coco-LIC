@@ -153,4 +153,7 @@ if(CATKIN_ENABLE_TESTING)
                         ${thirdparty_libraries})
   add_test(NAME robust_wnoa_process_factor_test
            COMMAND robust_wnoa_process_factor_test)
+  add_executable(wnoj_translation_factor_test tests/test_wnoj_translation_factor.cpp)
+  target_link_libraries(wnoj_translation_factor_test ${thirdparty_libraries})
+  add_test(NAME wnoj_translation_factor_test COMMAND wnoj_translation_factor_test)
 endif()

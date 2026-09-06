@@ -162,6 +162,11 @@ namespace cocolic
                    enable_robust_process_translation, true);
     trajectory_manager_->SetRobustProcessTranslationEnabled(
         enable_robust_process_translation);
+    bool robust_process_translation_wnoj = false;
+    nh.param<bool>("robust_process_translation_wnoj",
+                   robust_process_translation_wnoj, false);
+    trajectory_manager_->SetRobustProcessTranslationWnoj(
+        robust_process_translation_wnoj);
     bool enable_robust_process_rotation = true;
     nh.param<bool>("enable_robust_process_rotation",
                    enable_robust_process_rotation, true);
@@ -170,6 +175,8 @@ namespace cocolic
     bool enable_robust_process_projection_diagnostics = false;
     nh.param<bool>("enable_robust_process_projection_diagnostics",
                    enable_robust_process_projection_diagnostics, false);
+    if (robust_process_translation_wnoj && enable_robust_process_projection_diagnostics)
+      throw std::invalid_argument("Process projection diagnostics require WNOA");
     trajectory_manager_->SetRobustProcessProjectionDiagnosticsEnabled(
         enable_robust_process_projection_diagnostics);
     bool enable_robust_process_risk_scaling = false;
