@@ -23,7 +23,7 @@
 namespace cocolic {
 
 IMUInitializer::IMUInitializer(const YAML::Node &node) : initial_done_(false) {
-  window_length_ = yaml::GetValue<double>(node, "window_length", 1.0) * 1e9;
+  window_length_ = yaml::GetValue<double>(node, "window_length", 0.5) * 1e9;
   imu_excite_threshold_ =
       yaml::GetValue<double>(node, "imu_excite_threshold", 1.0);
 
