@@ -189,6 +189,11 @@ namespace cocolic
       robust_process_rotation_enabled_ = enabled;
     }
 
+    void SetRobustProcessRotationWnoj(bool enabled)
+    {
+      robust_process_rotation_wnoj_ = enabled;
+    }
+
     void SetRobustProcessProjectionDiagnosticsEnabled(bool enabled)
     {
       robust_process_projection_diagnostics_enabled_ = enabled;
@@ -438,6 +443,7 @@ namespace cocolic
     bool robust_process_prior_enabled_ = false;
     bool robust_process_translation_enabled_ = true;
     bool robust_process_translation_wnoj_ = false;
+    bool robust_process_rotation_wnoj_ = false;
     bool robust_process_rotation_enabled_ = true;
     bool robust_process_projection_diagnostics_enabled_ = false;
     bool robust_process_risk_scaling_enabled_ = false;

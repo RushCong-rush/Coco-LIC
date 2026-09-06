@@ -128,6 +128,7 @@ add_executable(odometry_node
    src/odom/trajectory_estimator.cpp
    src/odom/odometry_manager.cpp
    src/odom/factor/analytic_diff/marginalization_factor.cpp
+   src/odom/factor/analytic_diff/wnoj_rotation_factor.cpp
    src/utils/parameter_struct.cpp
 )
 add_dependencies(odometry_node ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
@@ -156,4 +157,8 @@ if(CATKIN_ENABLE_TESTING)
   add_executable(wnoj_translation_factor_test tests/test_wnoj_translation_factor.cpp)
   target_link_libraries(wnoj_translation_factor_test ${thirdparty_libraries})
   add_test(NAME wnoj_translation_factor_test COMMAND wnoj_translation_factor_test)
+  add_executable(wnoj_rotation_factor_test tests/test_wnoj_rotation_factor.cpp
+                 src/odom/factor/analytic_diff/wnoj_rotation_factor.cpp)
+  target_link_libraries(wnoj_rotation_factor_test ${thirdparty_libraries})
+  add_test(NAME wnoj_rotation_factor_test COMMAND wnoj_rotation_factor_test)
 endif()

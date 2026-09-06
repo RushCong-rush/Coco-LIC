@@ -358,7 +358,7 @@ namespace cocolic
           translation_sqrt_weight, rotation_sqrt_weight,
           robust_process_translation_enabled_,
           robust_process_rotation_enabled_, process_cost_scale,
-          robust_process_translation_wnoj_);
+          robust_process_translation_wnoj_, robust_process_rotation_wnoj_);
       factor_count += static_cast<int>(robust_process_translation_enabled_);
       factor_count += static_cast<int>(robust_process_rotation_enabled_);
     }
@@ -536,7 +536,7 @@ namespace cocolic
       return energy;
     };
     double translation_energy = process_energy(translation_error);
-    const double rotation_energy = process_energy(rotation_error);
+    double rotation_energy = process_energy(rotation_error);
     double translation_floor = opt_weight_.imu_noise.sigma_a_2;
     if (robust_process_translation_wnoj_)
     {
@@ -547,8 +547,15 @@ namespace cocolic
       // Match the WNOA floor's velocity increment variance over this window.
       translation_floor *= 3.0 / (dt * dt);
     }
-    const double rotation_floor =
+    double rotation_floor =
         opt_weight_.imu_noise.sigma_w_2 / (dt * dt);
+    if (robust_process_rotation_wnoj_)
+    {
+      rotation_energy = analytic_derivative::WnojRotationEnergy(
+          phi, origin.angular_velocity, origin.angular_acceleration,
+          target.angular_velocity, target.angular_acceleration, dt);
+      rotation_floor *= 3.0 / (dt * dt);
+    }
     const double translation_q_hat = std::max(
         translation_energy / 6.0, translation_floor);
     const double rotation_q_hat = std::max(
@@ -1573,8 +1580,13 @@ namespace cocolic
                         rotation_blocks[i]) != drop_param.end())
             rotation_drop_set.push_back(i);
         }
-        ceres::CostFunction *rotation_factor =
-            new analytic_derivative::RobustWnoaRotationFactor(
+        ceres::CostFunction *rotation_factor;
+        if (robust_process_rotation_wnoj_)
+          rotation_factor = new analytic_derivative::WnojRotationFactor(
+              *trajectory_, support_start,
+              pending_robust_process_.rotation_q_used);
+        else
+          rotation_factor = new analytic_derivative::RobustWnoaRotationFactor(
                 *trajectory_, support_start,
                 pending_robust_process_.rotation_q_used);
         marginalization_info->addResidualBlockInfo(new ResidualBlockInfo(
