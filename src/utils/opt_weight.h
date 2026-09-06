@@ -23,6 +23,7 @@
 #include <utils/yaml_utils.h>
 #include <Eigen/Core>
 #include <cmath>
+#include <stdexcept>
 
 namespace cocolic {
 struct IMUNoise {
@@ -125,6 +126,15 @@ struct OptWeight {
         1.0 / imu_noise.sigma_w * one3d;
     imu_info_vec.block<3, 1>(3, 0) =
         1.0 / imu_noise.sigma_a * one3d;
+    // Kalibr densities need sigma_sample = sigma_density * sqrt(rate).
+    // Omitted rate preserves existing configurations' effective weights.
+    if (node["imu_measurement_rate_hz"])
+    {
+      const double rate = node["imu_measurement_rate_hz"].as<double>();
+      if (!std::isfinite(rate) || rate <= 0.0)
+        throw std::invalid_argument("imu_measurement_rate_hz must be positive");
+      imu_info_vec /= std::sqrt(rate);
+    }
     imu_noise.sigma_wb_discrete = imu_noise.sigma_wb;
     imu_noise.sigma_ab_discrete = imu_noise.sigma_ab;
     /////////////////////////////////////////////////

@@ -1,0 +1,35 @@
+lidar0:
+    topic: /hesai/pandar
+    is_livox: false
+    # inv(T_cam0_imu) * T_cam0_lidar, from the official March/June calibration.
+    Extrinsics:
+        Trans: [-0.0006517086833720872, -0.015510342560109067, 0.08463265780318906]
+        Rot: [-0.016638045748656103, -0.9998601056363499, 0.0017159809243348038,
+               0.9998552572581157, -0.016631813594098228, 0.0035843144224121815,
+              -0.003555273122162411, 0.0017753685358884409, 0.9999921040186213]
+num_lidars: 1
+lidar_timestamp_end: false
+VLP16:
+    N_SCAN: 64
+    Horizon_SCAN: 1800
+    edge_threshold: 1.0
+    surf_threshold: 0.1
+    odometry_surface_leaf_size: 0.4
+    min_distance: 0.1
+    max_distance: 60.0
+use_corner_feature: false
+current_scan_param:
+    corner_leaf_size: 0.2
+    surface_leaf_size: 0.4
+    edge_min_valid_num: 10
+    surf_min_valid_num: 100
+    correspondence_downsample: 2
+keyframe_strategy:
+    angle_degree: 10
+    dist_meter: 1.0
+    time_second: 10
+map_param:
+    keyframe_search_radius: 50.0
+    keyframe_search_time: 10.0
+    keyframe_density: 2
+    cloud_reserved_time: -1

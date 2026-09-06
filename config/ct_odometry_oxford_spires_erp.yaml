@@ -1,0 +1,29 @@
+odometry_mode: 1
+lidar_yaml: /oxford_spires_erp/lidar.yaml
+imu_yaml: /oxford_spires_erp/imu.yaml
+camera_yaml: /oxford_spires_erp/camera.yaml
+
+bag_path: /path/to/oxford_spires_odgs.bag
+bag_start: 0.0
+bag_durr: -1
+t_add: 0.1
+distance0: 0.03
+non_uniform: true
+division_coarse: 1
+t_begin_add_cam: 0.0
+enable_visual_constraints: true
+lidar_iter: 2
+use_lidar_scale: true
+lidar_weight: 500.0
+image_weight: 4.0
+
+# Official calibration/imu.yaml: SI continuous-time noise densities.
+# Measurement whitening uses sigma_sample = sigma_density * sqrt(rate).
+imu_measurement_rate_hz: 400.0
+gyroscope_noise_density: 0.00022632861789099884
+gyroscope_random_walk: 8.252445860125436e-06
+accelerometer_noise_density: 0.0011002607647952406
+accelerometer_random_walk: 3.390710627779767e-05
+is_evo_viral: false
+if_3dgs: true
+lidar_skip: 10

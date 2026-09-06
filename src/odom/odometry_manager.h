@@ -29,6 +29,7 @@
 #include <lidar/lidar_handler.h>
 
 #include <condition_variable>
+#include <fstream>
 #include <mutex>
 #include <thread>
 
@@ -150,6 +151,7 @@ namespace cocolic
 
     int64_t t_begin_add_cam_; // 
     bool enable_visual_constraints_;
+    std::ofstream online_trajectory_stream_;
     std::shared_ptr<CameraGeometry> camera_geometry_;
 
     OdometryViewer odom_viewer_;

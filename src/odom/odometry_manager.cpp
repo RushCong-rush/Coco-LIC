@@ -24,6 +24,7 @@
 #include <iomanip>
 #include <string>
 #include <sstream>
+#include <stdexcept>
 
 std::fstream rgb_file;
 std::fstream img_file;
@@ -50,6 +51,16 @@ namespace cocolic
     bool deterministic_experiment = false;
     nh.param<bool>("deterministic_experiment", deterministic_experiment, false);
     SetMarginalizationDeterministicMode(deterministic_experiment);
+
+    std::string online_trajectory_path;
+    nh.param<std::string>("online_trajectory_path", online_trajectory_path, "");
+    if (!online_trajectory_path.empty())
+    {
+      online_trajectory_stream_.open(online_trajectory_path);
+      if (!online_trajectory_stream_)
+        throw std::runtime_error("Cannot open online trajectory: " + online_trajectory_path);
+      online_trajectory_stream_ << std::fixed << std::setprecision(9);
+    }
 
     odometry_mode_ = OdometryMode(node["odometry_mode"].as<int>());
     std::cout << "\n🥥 Odometry Mode: ";
@@ -335,6 +346,20 @@ namespace cocolic
 
     // lic optimization
     ProcessLICData();
+
+    // Persist each completed window even if a later solve aborts.
+    if (online_trajectory_stream_.is_open())
+    {
+      const int64_t time_ns = traj_max_time_ns_cur - 1;
+      const auto pose = trajectory_->GetIMUPoseNsNURBS(time_ns);
+      const auto &p = pose.translation();
+      const auto &q = pose.unit_quaternion();
+      online_trajectory_stream_
+          << (trajectory_->GetDataStartTime() + time_ns) * NS_TO_S << ' '
+          << p.x() << ' ' << p.y() << ' ' << p.z() << ' '
+          << q.x() << ' ' << q.y() << ' ' << q.z() << ' ' << q.w()
+          << std::endl;
+    }
 
     // prior update
     trajectory_manager_->UpdateLICPrior(
@@ -970,6 +995,11 @@ namespace cocolic
 
   double OdometryManager::SaveOdometry()
   {
+    if (!is_initialized_)
+    {
+      ROS_ERROR("IMU initialization did not complete; no trajectory to save.");
+      return -1.0;
+    }
     std::string descri;
     if (odometry_mode_ == LICO)
       descri = "LICO";

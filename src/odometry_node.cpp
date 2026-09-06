@@ -62,6 +62,8 @@ int main(int argc, char **argv) {
   odom_manager.RunBag();
 
   double t_traj_max = odom_manager.SaveOdometry();
+  if (t_traj_max < 0.0)
+    return 2;
   std::cout << "\n✨ All Done.\n\n";
 
   return 0;

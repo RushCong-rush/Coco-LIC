@@ -1,0 +1,22 @@
+%YAML:1.0
+camera_model: equirectangular
+image_topic: /odgs/panorama
+image_width: 1024
+image_height: 512
+valid_mask_path: /workspace/output/datasets/oxford_spires/keble03_odgs_valid_mask.png
+cam_fx: 1.0
+cam_fy: 1.0
+cam_cx: 512.0
+cam_cy: 256.0
+cam_d0: 0.0
+cam_d1: 0.0
+cam_d2: 0.0
+cam_d3: 0.0
+cam_d4: 0.0
+# ERP axes follow cam0; optical center is the centroid of the three cameras.
+CameraExtrinsics:
+    Trans: [-0.00034182695603847803, -0.03337780546378429, 0.004730447756015249]
+    Rot: [-0.999962580373083, -0.00531093006949835, 0.0068287535760213364,
+          -0.006850187891528375, 0.004028223061081825, -0.9999684236738783,
+           0.005283254627205093, -0.9999777834735967, -0.004064453195332585]
+img_time_offset: 0.0

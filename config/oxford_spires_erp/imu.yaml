@@ -1,0 +1,8 @@
+imu_topic: /alphasense_driver_ros/imu
+imu_excite_threshold: 0.5
+gravity_mag: 9.81
+if_normalized: false
+if_use_init_bg: false
+IMUExtrinsics:
+    Trans: [0, 0, 0]
+    Rot: [1, 0, 0, 0, 1, 0, 0, 0, 1]
