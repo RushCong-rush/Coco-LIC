@@ -1,6 +1,7 @@
 #include "utils/opt_weight.h"
 
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 namespace {
@@ -38,6 +39,25 @@ accelerometer_random_walk: 0.0003
             std::abs(whole(3, 3) - 9.e-9) < 1e-20, "Bias density units mismatch");
     Require((whole - 20. * continuous.ContinuousBiasCovariance(.005)).norm() < 1e-20,
             "Uniform sample partition mismatch");
+    config["imu_measurement_cost_scale"] = 200.;
+    const cocolic::OptWeight restored(config);
+    Require((restored.imu_info_vec - legacy.imu_info_vec).norm() < 1e-12,
+            "200 Hz / cost scale 200 must restore legacy measurement information");
+    Require((restored.ContinuousBiasCovariance(.1) - whole).norm() == 0.,
+            "Measurement cost scale changed bias covariance");
+    Require(restored.rot_weight == continuous.rot_weight &&
+            restored.pos_weight == continuous.pos_weight &&
+            restored.lidar_weight == continuous.lidar_weight &&
+            restored.image_weight == continuous.image_weight,
+            "Measurement cost scale changed other factor weights");
+    for (double scale : {0., -1., std::numeric_limits<double>::infinity()}) {
+      config["imu_measurement_cost_scale"] = scale;
+      bool invalid = false;
+      try { cocolic::OptWeight bad(config); }
+      catch (const std::invalid_argument&) { invalid = true; }
+      Require(invalid, "Invalid measurement cost scale accepted");
+    }
+    config["imu_measurement_cost_scale"] = 1.;
     config["imu_measurement_rate_hz"] = 400.;
     const cocolic::OptWeight faster(config);
     Require((faster.ContinuousBiasCovariance(.1) - whole).norm() == 0.,

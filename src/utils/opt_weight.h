@@ -139,6 +139,12 @@ struct OptWeight {
         throw std::invalid_argument("imu_measurement_rate_hz must be positive");
       imu_info_vec /= std::sqrt(rate);
     }
+    // Objective multiplier, separate from physical noise discretization.
+    const double cost_scale =
+        yaml::GetValue<double>(node, "imu_measurement_cost_scale", 1.0);
+    if (!std::isfinite(cost_scale) || cost_scale <= 0.0)
+      throw std::invalid_argument("imu_measurement_cost_scale must be positive");
+    imu_info_vec *= std::sqrt(cost_scale);
     imu_noise.sigma_wb_discrete = imu_noise.sigma_wb;
     imu_noise.sigma_ab_discrete = imu_noise.sigma_ab;
     /////////////////////////////////////////////////

@@ -7,7 +7,8 @@
 // Exercise the actual fine solve and marginalization with IMU-only and
 // IMU/camera windows, without introducing a test-only production interface.
 bool CheckWindows(const std::string &config_root, bool process_prior,
-                  const std::string &diagnostic_dir, bool continuous_noise = false) {
+                  const std::string &diagnostic_dir, bool continuous_noise = false,
+                  double measurement_cost_scale = 1.) {
   auto trajectory = std::make_shared<cocolic::Trajectory>(0.1);
   trajectory->SetSensorExtrinsics(cocolic::LiDARSensor, cocolic::ExtrinsicParam());
   trajectory->SetSensorExtrinsics(cocolic::CameraSensor, cocolic::ExtrinsicParam());
@@ -16,6 +17,7 @@ bool CheckWindows(const std::string &config_root, bool process_prior,
     config["imu_noise_is_continuous"] = true;
     config["imu_measurement_rate_hz"] = 200.;
   }
+  config["imu_measurement_cost_scale"] = measurement_cost_scale;
   cocolic::TrajectoryManager manager(config, config_root, trajectory);
   manager.ConfigureControlPointDiagnostics(diagnostic_dir, "");
   auto camera = std::make_shared<cocolic::CameraGeometry>(
@@ -114,7 +116,9 @@ int main(int argc, char **argv) {
   const bool passed = CheckWindows(argv[1], false, (output / "off").string()) &&
                       CheckWindows(argv[1], true, (output / "rotation").string()) &&
                       CheckWindows(argv[1], false, (output / "continuous_off").string(), true) &&
-                      CheckWindows(argv[1], true, (output / "continuous_rotation").string(), true);
+                      CheckWindows(argv[1], true, (output / "continuous_rotation").string(), true) &&
+                      CheckWindows(argv[1], false, (output / "gain_off").string(), true, 200.) &&
+                      CheckWindows(argv[1], true, (output / "gain_rotation").string(), true, 200.);
   if (passed) boost::filesystem::remove_all(output);
   else std::cerr << "Window diagnostics: " << output << '\n';
   return passed ? 0 : 1;
