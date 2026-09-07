@@ -23,6 +23,10 @@ gyroscope_noise_density: 1.3254540721802960e-03
 gyroscope_random_walk: 5.2026292534341382e-05
 accelerometer_noise_density: 1.1472382386578356e-02
 accelerometer_random_walk: 3.3397564584716999e-04
+# Continuous Allan/Kalibr noise; cost scale multiplies measurement energy only.
+imu_noise_is_continuous: true
+imu_measurement_rate_hz: 200.0
+imu_measurement_cost_scale: 200.0
 
 is_evo_viral: false
 
