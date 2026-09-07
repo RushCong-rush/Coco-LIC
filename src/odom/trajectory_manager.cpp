@@ -197,14 +197,26 @@ namespace cocolic
     boost::filesystem::create_directories(output_dir);
     observability_stream_.open(output_dir + "/observability_windows.csv",
                                std::ios::out | std::ios::trunc);
-    if (!observability_stream_)
+    imu_state_stream_.open(output_dir + "/imu_state_windows.csv",
+                           std::ios::out | std::ios::trunc);
+    if (!observability_stream_ || !imu_state_stream_)
     {
       LOG(ERROR) << "Cannot open observability diagnostic output: "
                  << output_dir;
+      observability_stream_.close();
+      imu_state_stream_.close();
       return;
     }
 
     observability_output_dir_ = output_dir;
+    imu_state_stream_ << std::setprecision(17)
+        << "window_end_time_s,stage,lidar_iteration,query_time_s,"
+           "position_x,position_y,position_z,quaternion_x,quaternion_y,quaternion_z,quaternion_w,"
+           "velocity_x,velocity_y,velocity_z,acceleration_x,acceleration_y,acceleration_z,"
+           "used_bg_x,used_bg_y,used_bg_z,used_ba_x,used_ba_y,used_ba_z,"
+           "latest_bg_x,latest_bg_y,latest_bg_z,latest_ba_x,latest_ba_y,latest_ba_z,"
+           "gravity_x,gravity_y,gravity_z,imu_samples,"
+           "gyro_raw_rms,accel_raw_rms,gyro_weighted_rms,accel_weighted_rms,diagnostic_time_ms\n";
     observability_stream_ << std::setprecision(17)
                           << "window_index,window_start_time_s,"
                              "window_end_time_s,diagnostic_success,"
@@ -240,6 +252,52 @@ namespace cocolic
            "coarse_to_fine_rotation_max,solution_usable,"
            "initial_cost,final_cost,iterations,successful_steps,"
            "unsuccessful_steps,optimization_time_ms\n";
+  }
+
+  void TrajectoryManager::WriteImuStateDiagnostics(const char *stage, int lidar_iteration)
+  {
+    if (!imu_state_stream_.is_open())
+      return;
+    TicToc timer;
+    const auto &bias = all_imu_bias_.at(tparam_.last_bias_time);
+    const auto &latest = all_imu_bias_.rbegin()->second;
+    const auto end = EvaluateTrajectoryDynamics(opt_max_t_ns - 1);
+    Eigen::Vector4d sums = Eigen::Vector4d::Zero();
+    int samples = 0;
+    for (int i = tparam_.lio_imu_idx[0]; i <= tparam_.lio_imu_idx[1]; ++i)
+    {
+      const auto &imu = imu_data_.at(i);
+      if (imu.timestamp < opt_min_t_ns || imu.timestamp >= opt_max_t_ns)
+        continue;
+      const auto state = EvaluateTrajectoryDynamics(imu.timestamp);
+      const Eigen::Vector3d gyro = state.angular_velocity - imu.gyro + bias.gyro_bias;
+      // gravity_ is the upward compensation vector, opposite physical gravity.
+      const Eigen::Vector3d accel = state.rotation.inverse() *
+          (state.linear_acceleration + gravity_) - imu.accel + bias.accel_bias;
+      sums += Eigen::Vector4d(gyro.squaredNorm(), accel.squaredNorm(),
+          gyro.cwiseProduct(opt_weight_.imu_info_vec.head<3>()).squaredNorm(),
+          accel.cwiseProduct(opt_weight_.imu_info_vec.tail<3>()).squaredNorm());
+      ++samples;
+    }
+    const double start_s = trajectory_->GetDataStartTime() * NS_TO_S;
+    imu_state_stream_ << start_s + opt_max_t_ns * NS_TO_S << ',' << stage << ','
+                      << lidar_iteration << ',' << start_s + end.time_ns * NS_TO_S;
+    const auto write_vector = [this](const auto &value) {
+      for (int i = 0; i < value.size(); ++i) imu_state_stream_ << ',' << value[i];
+    };
+    write_vector(end.position);
+    write_vector(end.rotation.coeffs());
+    write_vector(end.linear_velocity);
+    write_vector(end.linear_acceleration);
+    write_vector(bias.gyro_bias);
+    write_vector(bias.accel_bias);
+    write_vector(latest.gyro_bias);
+    write_vector(latest.accel_bias);
+    write_vector(gravity_);
+    imu_state_stream_ << ',' << samples;
+    write_vector((sums / (3. * samples)).array().sqrt().matrix().eval());
+    imu_state_stream_ << ',' << timer.toc() << '\n';
+    imu_state_stream_.flush();
   }
 
   void TrajectoryManager::ConfigureRobustProcessDiagnostics(
@@ -1257,7 +1315,9 @@ namespace cocolic
                                                 opt_weight_.imu_info_vec);
     }
 
+    WriteImuStateDiagnostics("coarse_before", -1);
     ceres::Solver::Summary summary = estimator->Solve(50, false);
+    WriteImuStateDiagnostics("coarse_after", -1);
     CaptureCoarseControlPoints();
     PrepareRobustProcessDiagnostic();
     static int init_cnt = 0;
@@ -1448,10 +1508,12 @@ namespace cocolic
       pending_observability_valid_ = pending_observability_.success;
     }
 
+    WriteImuStateDiagnostics("fine_before", lidar_iter);
     TicToc t_opt;
     static int loam_cnt = 0;
     ceres::Solver::Summary summary = estimator->Solve(iteration, false);
     double opt_time = t_opt.toc();
+    WriteImuStateDiagnostics("fine_after", lidar_iter);
     // LOG(INFO) << "[t_opt] " << opt_time << std::endl;
     // LOG(INFO) << "LoamSolver " << summary.BriefReport();
     // LOG(INFO) << ++loam_cnt << " UpdateLio Successful/Unsuccessful steps: "

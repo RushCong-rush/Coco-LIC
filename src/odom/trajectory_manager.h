@@ -317,6 +317,8 @@ namespace cocolic
         const ceres::Solver::Summary &summary,
         double optimization_time_ms);
 
+    void WriteImuStateDiagnostics(const char *stage, int lidar_iteration);
+
     struct RobustProcessDiagnostic
     {
       bool valid = false;
@@ -425,6 +427,7 @@ namespace cocolic
 
     std::string observability_output_dir_;
     std::ofstream observability_stream_;
+    std::ofstream imu_state_stream_;
     size_t observability_window_index_ = 0;
     CausalObservabilityDiagnostics pending_observability_;
     ImuExcitation pending_imu_excitation_;

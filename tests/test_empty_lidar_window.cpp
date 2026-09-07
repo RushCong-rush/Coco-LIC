@@ -8,7 +8,7 @@
 // IMU/camera windows, without introducing a test-only production interface.
 bool CheckWindows(const std::string &config_root, bool process_prior,
                   const std::string &diagnostic_dir, bool continuous_noise = false,
-                  double measurement_cost_scale = 1.) {
+                  double measurement_cost_scale = 1., bool observability = false) {
   auto trajectory = std::make_shared<cocolic::Trajectory>(0.1);
   trajectory->SetSensorExtrinsics(cocolic::LiDARSensor, cocolic::ExtrinsicParam());
   trajectory->SetSensorExtrinsics(cocolic::CameraSensor, cocolic::ExtrinsicParam());
@@ -20,6 +20,7 @@ bool CheckWindows(const std::string &config_root, bool process_prior,
   config["imu_measurement_cost_scale"] = measurement_cost_scale;
   cocolic::TrajectoryManager manager(config, config_root, trajectory);
   manager.ConfigureControlPointDiagnostics(diagnostic_dir, "");
+  if (observability) manager.ConfigureObservabilityDiagnostics(diagnostic_dir);
   auto camera = std::make_shared<cocolic::CameraGeometry>(
       cocolic::CameraModel::EQUIRECTANGULAR, 1024, 512);
   manager.SetCameraGeometry(camera);
@@ -105,6 +106,31 @@ bool CheckWindows(const std::string &config_root, bool process_prior,
       1.0 / (config["accelerometer_random_walk"].as<double>() * bias_std_time));
   if (windows != 10 || !manager.sqrt_info_.isApprox(expected_bias_info, 1e-10))
     return false;
+  if (observability) {
+    std::ifstream states(diagnostic_dir + "/imu_state_windows.csv");
+    std::getline(states, line);
+    std::vector<std::string> names;
+    std::istringstream names_row(line);
+    while (std::getline(names_row, field, ',')) names.push_back(field);
+    int rows = 0;
+    while (std::getline(states, line)) {
+      std::istringstream row(line);
+      size_t column = 0;
+      while (std::getline(row, field, ',')) {
+        if (names.at(column) != "stage") {
+          const double value = std::stod(field);
+          if (!std::isfinite(value)) return false;
+          if (names[column] == "imu_samples" && value != 20.) return false;
+          if ((names[column] == "gyro_raw_rms" || names[column] == "accel_raw_rms") &&
+              std::abs(value) > 1e-5) return false;
+        }
+        ++column;
+      }
+      if (column != names.size()) return false;
+      ++rows;
+    }
+    if (rows != 60) return false;
+  }
   std::cout << "prior=" << process_prior << " fine_solves=" << manager.opt_cnt << '\n';
   return manager.opt_cnt == 20;
 }
@@ -118,7 +144,9 @@ int main(int argc, char **argv) {
                       CheckWindows(argv[1], false, (output / "continuous_off").string(), true) &&
                       CheckWindows(argv[1], true, (output / "continuous_rotation").string(), true) &&
                       CheckWindows(argv[1], false, (output / "gain_off").string(), true, 200.) &&
-                      CheckWindows(argv[1], true, (output / "gain_rotation").string(), true, 200.);
+                      CheckWindows(argv[1], true, (output / "gain_rotation").string(), true, 200.) &&
+                      CheckWindows(argv[1], false, (output / "diagnostic_off").string(), true, 200., true) &&
+                      CheckWindows(argv[1], true, (output / "diagnostic_rotation").string(), true, 200., true);
   if (passed) boost::filesystem::remove_all(output);
   else std::cerr << "Window diagnostics: " << output << '\n';
   return passed ? 0 : 1;
