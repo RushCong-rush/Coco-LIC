@@ -89,7 +89,12 @@ void Rgbmap_tracker::update_and_append_track_pts(std::shared_ptr<Image_frame> &i
         u_i = std::round(u_d / mini_dis) * mini_dis;
         v_i = std::round(v_d / mini_dis) * mini_dis;
 
-        double error = vec_2(u_d - it->second.x, v_d - it->second.y).norm();
+        Eigen::Vector2d difference(u_d - it->second.x, v_d - it->second.y);
+        if (img_pose->m_camera_geometry)
+            difference = img_pose->m_camera_geometry->pixelDifference(
+                Eigen::Vector2d(u_d, v_d),
+                Eigen::Vector2d(it->second.x, it->second.y));
+        const double error = difference.norm();
         // LOG(INFO) << "[max_allow_repro_err | error] " << max_allow_repro_err << " " << error;
 
         if (error > max_allow_repro_err)
