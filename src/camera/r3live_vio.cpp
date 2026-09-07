@@ -1392,15 +1392,16 @@ void R3LIVE::UpdateVisualSubMap(const cv::Mat& img_in, double img_time, const Ei
     frame_idx_++;
 
     // [4]
-    op_track.track_img(img_pose_, m_camera_geometry->isEquirectangular() ? 8.0 : -20);
+    op_track.track_img(img_pose_, -20);
     // LOG(INFO) << "[inlier after fmat] " << op_track.m_current_tracked_pts.size();
     op_track.inlier_aft_fmat = op_track.m_last_tracked_pts.size();
 
     // [5]
-    if (!m_camera_geometry->isEquirectangular())
-    {
-        op_track.remove_outlier_using_ransac_pnp( img_pose_, 1 );
-    }
+    op_track.remove_outlier_using_ransac_pnp( img_pose_, 1 );
+    if (m_camera_geometry->isEquirectangular())
+        printf("[ERP RANSAC] t=%.6f tracked=%d relative=%d absolute=%zu\n",
+               img_time, op_track.inlier_aft_track, op_track.inlier_aft_fmat,
+               op_track.m_map_rgb_pts_in_current_frame_pos.size());
     // LOG(INFO) << "[inlier after pnp] " << op_track.m_current_tracked_pts.size();
     op_track.inlier_aft_pnp = op_track.m_last_tracked_pts.size();
 

@@ -46,6 +46,7 @@ Dr. Fu Zhang < fuzhang@hku.hk >.
  POSSIBILITY OF SUCH DAMAGE.
 */
 #include "rgbmap_tracker.hpp"
+#include "camera/erp_ransac.h"
 #include <opencv2/core/core.hpp>
 #include <opencv2/features2d/features2d.hpp>
 #include <opencv2/highgui/highgui.hpp>
@@ -318,6 +319,15 @@ void Rgbmap_tracker::track_img(std::shared_ptr<Image_frame> &img_pose, double di
         reduce_vector(m_old_ids, status);
         reduce_vector(m_current_tracked_pts, status);
     }
+    else
+    {
+        status = cocolic::ErpRelativeInliers(*img_pose->m_camera_geometry,
+            m_last_tracked_pts, m_current_tracked_pts,
+            m_map_rgb_pts_in_current_frame_pos.key_comp().deterministic);
+        reduce_vector(m_last_tracked_pts, status);
+        reduce_vector(m_old_ids, status);
+        reduce_vector(m_current_tracked_pts, status);
+    }
     // m_current_tracked_pts_tmp.clear();
     // m_current_tracked_pts_tmp = m_current_tracked_pts;
 
@@ -380,6 +390,29 @@ int Rgbmap_tracker::get_all_tracked_pts(std::vector<std::vector<cv::Point2f>> *i
 
 int Rgbmap_tracker::remove_outlier_using_ransac_pnp(std::shared_ptr<Image_frame> &img_pose, int if_remove_ourlier)
 {
+    if (img_pose->m_camera_geometry && img_pose->m_camera_geometry->isEquirectangular())
+    {
+        std::vector<Eigen::Vector3d> world;
+        std::vector<cv::Point2f> pixels;
+        for (const auto& entry : m_map_rgb_pts_in_current_frame_pos)
+        {
+            world.push_back(static_cast<RGB_pts*>(entry.first)->get_pos());
+            pixels.push_back(entry.second);
+        }
+        const auto mask = cocolic::ErpAbsoluteInliers(*img_pose->m_camera_geometry,
+            world, pixels, m_map_rgb_pts_in_current_frame_pos.key_comp().deterministic);
+        if (if_remove_ourlier)
+        {
+            size_t index = 0;
+            for (auto it = m_map_rgb_pts_in_current_frame_pos.begin();
+                 it != m_map_rgb_pts_in_current_frame_pos.end(); ++index)
+                if (!mask[index]) it = m_map_rgb_pts_in_current_frame_pos.erase(it);
+                else ++it;
+            m_map_rgb_pts_in_last_frame_pos = m_map_rgb_pts_in_current_frame_pos;
+            update_last_tracking_vector_and_ids();
+        }
+        return std::count(mask.begin(), mask.end(), 1);
+    }
     Common_tools::Timer tim;
     tim.tic();
 

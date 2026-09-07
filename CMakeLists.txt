@@ -41,6 +41,7 @@ find_package(Eigen3 REQUIRED)
 find_package(Ceres REQUIRED)
 # find_package(Sophus REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(opengv REQUIRED)
 # ROS Noetic on Ubuntu 20.04 ships PCL 1.10. Coco-LIC only uses APIs
 # available in that release.
 find_package(PCL 1.10 REQUIRED)
@@ -89,6 +90,7 @@ list(APPEND thirdparty_libraries
         ${Boost_LIBRARIES}
         ${catkin_LIBRARIES}
         ${OpenCV_LIBS}
+        opengv
         ${CERES_LIBRARIES}
         ${PCL_LIBRARIES}
         ${Boost_LIBRARIES}
@@ -142,6 +144,9 @@ target_link_libraries(odometry_node
 )
 
 if(CATKIN_ENABLE_TESTING)
+  add_executable(erp_ransac_test tests/test_erp_ransac.cpp)
+  target_link_libraries(erp_ransac_test r3live_lib ${thirdparty_libraries})
+  add_test(NAME erp_ransac_test COMMAND erp_ransac_test)
   add_executable(camera_geometry_test tests/test_camera_geometry.cpp)
   target_link_libraries(camera_geometry_test ${catkin_LIBRARIES})
   add_test(NAME camera_geometry_test COMMAND camera_geometry_test)

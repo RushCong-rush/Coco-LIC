@@ -64,6 +64,7 @@
 
   <build_depend>cv_bridge</build_depend>
   <exec_depend>cv_bridge</exec_depend>
+  <depend>opengv</depend>
 
   <build_depend>ov_core</build_depend>
   <exec_depend>ov_core</exec_depend>
