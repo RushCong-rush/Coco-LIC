@@ -222,6 +222,14 @@ namespace cocolic
         new MarginalizationFactor(last_marginalization_info);
     problem_->AddResidualBlock(marginalization_factor, NULL,
                                last_marginalization_parameter_blocks);
+    // A retained rotation may have no current measurement factor to register it.
+    const auto &block_sizes = marginalization_factor->parameter_block_sizes();
+    for (size_t i = 0; i < block_sizes.size(); ++i)
+    {
+      if (block_sizes[i] == 4)
+        problem_->SetParameterization(last_marginalization_parameter_blocks[i],
+                                      analytic_local_parameterization_);
+    }
 
     if (options.show_residual_summary)
     {

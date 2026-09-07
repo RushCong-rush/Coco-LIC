@@ -144,6 +144,15 @@ target_link_libraries(odometry_node
 )
 
 if(CATKIN_ENABLE_TESTING)
+  add_executable(marginalization_manifold_test
+                 tests/test_marginalization_manifold.cpp
+                 src/odom/trajectory_estimator.cpp
+                 src/odom/factor/analytic_diff/marginalization_factor.cpp
+                 src/odom/factor/analytic_diff/wnoj_rotation_factor.cpp
+                 src/utils/parameter_struct.cpp)
+  target_link_libraries(marginalization_manifold_test
+                        spline_lib r3live_lib ${thirdparty_libraries})
+  add_test(NAME marginalization_manifold_test COMMAND marginalization_manifold_test)
   add_executable(erp_ransac_test tests/test_erp_ransac.cpp)
   target_link_libraries(erp_ransac_test r3live_lib ${thirdparty_libraries})
   add_test(NAME erp_ransac_test COMMAND erp_ransac_test)
