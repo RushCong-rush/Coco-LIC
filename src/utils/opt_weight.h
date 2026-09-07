@@ -94,6 +94,7 @@ struct IMUNoise {
 
 struct OptWeight {
   IMUNoise imu_noise;
+  bool imu_noise_is_continuous = false;
 
   Eigen::Matrix<double, 6, 1> imu_info_vec;
 
@@ -118,6 +119,9 @@ struct OptWeight {
 
   void LoadWeight(const YAML::Node& node) {
     imu_noise = IMUNoise(node);
+    imu_noise_is_continuous = yaml::GetValue<bool>(node, "imu_noise_is_continuous", false);
+    if (imu_noise_is_continuous && !node["imu_measurement_rate_hz"])
+      throw std::invalid_argument("Continuous IMU noise requires imu_measurement_rate_hz");
 
     Eigen::Vector3d one3d = Eigen::Vector3d::Ones();
 
@@ -159,6 +163,13 @@ struct OptWeight {
   }
 
   inline double w2(double w) { return w * w; }
+
+  Eigen::Matrix<double, 6, 6> ContinuousBiasCovariance(double state_dt_s) const {
+    Eigen::Matrix<double, 6, 1> diagonal;
+    diagonal.head<3>().setConstant(imu_noise.sigma_wb_2 * state_dt_s);
+    diagonal.tail<3>().setConstant(imu_noise.sigma_ab_2 * state_dt_s);
+    return diagonal.asDiagonal();
+  }
 
   void print() {}
 };

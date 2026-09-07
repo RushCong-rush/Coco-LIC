@@ -7,11 +7,15 @@
 // Exercise the actual fine solve and marginalization with IMU-only and
 // IMU/camera windows, without introducing a test-only production interface.
 bool CheckWindows(const std::string &config_root, bool process_prior,
-                  const std::string &diagnostic_dir) {
+                  const std::string &diagnostic_dir, bool continuous_noise = false) {
   auto trajectory = std::make_shared<cocolic::Trajectory>(0.1);
   trajectory->SetSensorExtrinsics(cocolic::LiDARSensor, cocolic::ExtrinsicParam());
   trajectory->SetSensorExtrinsics(cocolic::CameraSensor, cocolic::ExtrinsicParam());
-  const auto config = YAML::LoadFile(config_root + "/ct_odometry_hilti_erp_exp21.yaml");
+  auto config = YAML::LoadFile(config_root + "/ct_odometry_hilti_erp_exp21.yaml");
+  if (continuous_noise) {
+    config["imu_noise_is_continuous"] = true;
+    config["imu_measurement_rate_hz"] = 200.;
+  }
   cocolic::TrajectoryManager manager(config, config_root, trajectory);
   manager.ConfigureControlPointDiagnostics(diagnostic_dir, "");
   auto camera = std::make_shared<cocolic::CameraGeometry>(
@@ -90,12 +94,13 @@ bool CheckWindows(const std::string &config_root, bool process_prior,
     }
     ++windows;
   }
-  // Twenty samples contain nineteen adjacent intervals in the existing bias sum.
+  // Continuous noise integrates over bias-state time, not the 19 sample gaps.
+  const double bias_std_time = continuous_noise ? std::sqrt(.1) : .005 * std::sqrt(19.);
   Eigen::Matrix<double, 6, 1> expected_bias_info;
   expected_bias_info.head<3>().setConstant(
-      1.0 / (config["gyroscope_random_walk"].as<double>() * 0.005 * std::sqrt(19.0)));
+      1.0 / (config["gyroscope_random_walk"].as<double>() * bias_std_time));
   expected_bias_info.tail<3>().setConstant(
-      1.0 / (config["accelerometer_random_walk"].as<double>() * 0.005 * std::sqrt(19.0)));
+      1.0 / (config["accelerometer_random_walk"].as<double>() * bias_std_time));
   if (windows != 10 || !manager.sqrt_info_.isApprox(expected_bias_info, 1e-10))
     return false;
   std::cout << "prior=" << process_prior << " fine_solves=" << manager.opt_cnt << '\n';
@@ -107,7 +112,9 @@ int main(int argc, char **argv) {
   const auto output = boost::filesystem::temp_directory_path() /
                       boost::filesystem::unique_path("cocolic-window-%%%%-%%%%");
   const bool passed = CheckWindows(argv[1], false, (output / "off").string()) &&
-                      CheckWindows(argv[1], true, (output / "rotation").string());
+                      CheckWindows(argv[1], true, (output / "rotation").string()) &&
+                      CheckWindows(argv[1], false, (output / "continuous_off").string(), true) &&
+                      CheckWindows(argv[1], true, (output / "continuous_rotation").string(), true);
   if (passed) boost::filesystem::remove_all(output);
   else std::cerr << "Window diagnostics: " << output << '\n';
   return passed ? 0 : 1;

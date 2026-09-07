@@ -1374,23 +1374,31 @@ namespace cocolic
 
     /// [3] bias factor
     Eigen::Matrix<double, 6, 6> covariance = Eigen::Matrix<double, 6, 6>::Zero();
-    Eigen::Matrix<double, 6, 6> noise_covariance = Eigen::Matrix<double, 6, 6>::Zero();
-    noise_covariance.block<3, 3>(0, 0) = (opt_weight_.imu_noise.sigma_wb_discrete * opt_weight_.imu_noise.sigma_wb_discrete) * Eigen::Matrix3d::Identity();
-    noise_covariance.block<3, 3>(3, 3) = (opt_weight_.imu_noise.sigma_ab_discrete * opt_weight_.imu_noise.sigma_ab_discrete) * Eigen::Matrix3d::Identity();
-    for (int i = tparam_.lio_imu_idx[0] + 1; i <= tparam_.lio_imu_idx[1]; ++i)
+    if (opt_weight_.imu_noise_is_continuous)
     {
-      if (imu_data_.at(i - 1).timestamp < opt_min_t_ns)
-        continue;
-      if (imu_data_.at(i).timestamp >= opt_max_t_ns)
-        continue;
-      double dt = (imu_data_[i].timestamp - imu_data_[i - 1].timestamp) * NS_TO_S;
-      Eigen::Matrix<double, 6, 6> F = Eigen::Matrix<double, 6, 6>::Zero();
-      F.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
-      F.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity();
-      Eigen::Matrix<double, 6, 6> G = Eigen::Matrix<double, 6, 6>::Zero();
-      G.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * dt;
-      G.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * dt;
-      covariance = F * covariance * F.transpose() + G * noise_covariance * G.transpose();
+      const double state_dt_s = (tparam_.cur_bias_time - tparam_.last_bias_time) * NS_TO_S;
+      covariance = opt_weight_.ContinuousBiasCovariance(state_dt_s);
+    }
+    else
+    {
+      Eigen::Matrix<double, 6, 6> noise_covariance = Eigen::Matrix<double, 6, 6>::Zero();
+      noise_covariance.block<3, 3>(0, 0) = (opt_weight_.imu_noise.sigma_wb_discrete * opt_weight_.imu_noise.sigma_wb_discrete) * Eigen::Matrix3d::Identity();
+      noise_covariance.block<3, 3>(3, 3) = (opt_weight_.imu_noise.sigma_ab_discrete * opt_weight_.imu_noise.sigma_ab_discrete) * Eigen::Matrix3d::Identity();
+      for (int i = tparam_.lio_imu_idx[0] + 1; i <= tparam_.lio_imu_idx[1]; ++i)
+      {
+        if (imu_data_.at(i - 1).timestamp < opt_min_t_ns)
+          continue;
+        if (imu_data_.at(i).timestamp >= opt_max_t_ns)
+          continue;
+        double dt = (imu_data_[i].timestamp - imu_data_[i - 1].timestamp) * NS_TO_S;
+        Eigen::Matrix<double, 6, 6> F = Eigen::Matrix<double, 6, 6>::Zero();
+        F.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
+        F.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity();
+        Eigen::Matrix<double, 6, 6> G = Eigen::Matrix<double, 6, 6>::Zero();
+        G.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * dt;
+        G.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * dt;
+        covariance = F * covariance * F.transpose() + G * noise_covariance * G.transpose();
+      }
     }
 
     Eigen::Matrix<double, 6, 6> sqrt_info_mat = Eigen::LLT<Eigen::Matrix<double, 6, 6>>(covariance.inverse()).matrixL().transpose();
