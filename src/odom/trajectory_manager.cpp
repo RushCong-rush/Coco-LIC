@@ -1275,7 +1275,8 @@ namespace cocolic
       const int iteration,
       bool final_lidar_iteration)
   {
-    if (point_corrs.empty() || imu_data_.empty() || imu_data_.size() == 1)
+    // Missing LiDAR matches must not skip current IMU/visual and prior state updates.
+    if (imu_data_.empty() || imu_data_.size() == 1)
     {
       // LOG(WARNING) << " input empty data " << point_corrs.size() << ", "
       //              << imu_data_.size();

@@ -144,6 +144,20 @@ target_link_libraries(odometry_node
 )
 
 if(CATKIN_ENABLE_TESTING)
+  add_executable(empty_lidar_window_test
+                 tests/test_empty_lidar_window.cpp
+                 src/odom/trajectory_manager.cpp
+                 src/imu/imu_state_estimator.cpp
+                 src/odom/trajectory_estimator.cpp
+                 src/odom/factor/analytic_diff/marginalization_factor.cpp
+                 src/odom/factor/analytic_diff/wnoj_rotation_factor.cpp
+                 src/utils/parameter_struct.cpp)
+  target_link_libraries(empty_lidar_window_test
+                        spline_lib r3live_lib ${thirdparty_libraries})
+  add_test(NAME empty_lidar_window_test COMMAND empty_lidar_window_test
+           ${CMAKE_CURRENT_SOURCE_DIR}/config)
+  set_tests_properties(empty_lidar_window_test PROPERTIES
+                      FAIL_REGULAR_EXPRESSION "GetIdxT wrong")
   add_executable(marginalization_manifold_test
                  tests/test_marginalization_manifold.cpp
                  src/odom/trajectory_estimator.cpp
