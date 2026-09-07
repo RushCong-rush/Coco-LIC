@@ -1,7 +1,6 @@
 #include "utils/opt_weight.h"
 
 #include <iostream>
-#include <limits>
 #include <stdexcept>
 
 namespace {
@@ -50,8 +49,8 @@ accelerometer_random_walk: 0.0003
             restored.lidar_weight == continuous.lidar_weight &&
             restored.image_weight == continuous.image_weight,
             "Measurement cost scale changed other factor weights");
-    for (double scale : {0., -1., std::numeric_limits<double>::infinity()}) {
-      config["imu_measurement_cost_scale"] = scale;
+    for (const char *scale : {"0", "-1", ".inf", ".nan"}) {
+      config["imu_measurement_cost_scale"] = YAML::Load(scale);
       bool invalid = false;
       try { cocolic::OptWeight bad(config); }
       catch (const std::invalid_argument&) { invalid = true; }
