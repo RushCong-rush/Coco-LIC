@@ -1157,6 +1157,7 @@ namespace cocolic
     {
       if (rter->timestamp < t_max)
       {
+        // Both indices are inclusive; timestamp filtering keeps [t_min, t_max).
         tparam_.lio_imu_idx[1] =
             std::distance(imu_data_.begin(), rter.base()) - 1;
         tparam_.lio_imu_time[1] = rter->timestamp;
@@ -1359,7 +1360,7 @@ namespace cocolic
     }
 
     // [2] imu factor
-    for (int i = tparam_.lio_imu_idx[0]; i < tparam_.lio_imu_idx[1]; ++i)
+    for (int i = tparam_.lio_imu_idx[0]; i <= tparam_.lio_imu_idx[1]; ++i)
     {
       if (imu_data_.at(i).timestamp < opt_min_t_ns)
         continue;
@@ -1376,7 +1377,7 @@ namespace cocolic
     Eigen::Matrix<double, 6, 6> noise_covariance = Eigen::Matrix<double, 6, 6>::Zero();
     noise_covariance.block<3, 3>(0, 0) = (opt_weight_.imu_noise.sigma_wb_discrete * opt_weight_.imu_noise.sigma_wb_discrete) * Eigen::Matrix3d::Identity();
     noise_covariance.block<3, 3>(3, 3) = (opt_weight_.imu_noise.sigma_ab_discrete * opt_weight_.imu_noise.sigma_ab_discrete) * Eigen::Matrix3d::Identity();
-    for (int i = tparam_.lio_imu_idx[0] + 1; i < tparam_.lio_imu_idx[1]; ++i)
+    for (int i = tparam_.lio_imu_idx[0] + 1; i <= tparam_.lio_imu_idx[1]; ++i)
     {
       if (imu_data_.at(i - 1).timestamp < opt_min_t_ns)
         continue;
@@ -1599,7 +1600,7 @@ namespace cocolic
     }
 
     // [1] imu factor marginalization
-    for (int i = tparam_.lio_imu_idx[0]; i < tparam_.lio_imu_idx[1]; ++i)
+    for (int i = tparam_.lio_imu_idx[0]; i <= tparam_.lio_imu_idx[1]; ++i)
     {
       if (imu_data_.at(i).timestamp < opt_min_t_ns)
         continue;

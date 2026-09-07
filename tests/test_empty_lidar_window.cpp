@@ -1,14 +1,19 @@
 #include <odom/trajectory_manager.h>
+#include <boost/filesystem.hpp>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 
 // Exercise the actual fine solve and marginalization with IMU-only and
 // IMU/camera windows, without introducing a test-only production interface.
-bool CheckWindows(const std::string &config_root, bool process_prior) {
+bool CheckWindows(const std::string &config_root, bool process_prior,
+                  const std::string &diagnostic_dir) {
   auto trajectory = std::make_shared<cocolic::Trajectory>(0.1);
   trajectory->SetSensorExtrinsics(cocolic::LiDARSensor, cocolic::ExtrinsicParam());
   trajectory->SetSensorExtrinsics(cocolic::CameraSensor, cocolic::ExtrinsicParam());
   const auto config = YAML::LoadFile(config_root + "/ct_odometry_hilti_erp_exp21.yaml");
   cocolic::TrajectoryManager manager(config, config_root, trajectory);
+  manager.ConfigureControlPointDiagnostics(diagnostic_dir, "");
   auto camera = std::make_shared<cocolic::CameraGeometry>(
       cocolic::CameraModel::EQUIRECTANGULAR, 1024, 512);
   manager.SetCameraGeometry(camera);
@@ -66,11 +71,44 @@ bool CheckWindows(const std::string &config_root, bool process_prior) {
         std::abs(pose.unit_quaternion().norm() - 1.0) > 1e-12)
       return false;
   }
+  std::ifstream csv(diagnostic_dir + "/optimization_windows.csv");
+  std::string line, field;
+  std::getline(csv, line);
+  std::istringstream header(line);
+  size_t imu_column = 0;
+  while (std::getline(header, field, ',') && field != "imu_factors")
+    ++imu_column;
+  if (field != "imu_factors") return false;
+  int windows = 0;
+  while (std::getline(csv, line)) {
+    std::istringstream row(line);
+    for (size_t column = 0; column <= imu_column; ++column)
+      std::getline(row, field, ',');
+    if (std::stoi(field) != 20) {
+      std::cerr << "Expected all 20 IMU samples in [start,end), got " << field << '\n';
+      return false;
+    }
+    ++windows;
+  }
+  // Twenty samples contain nineteen adjacent intervals in the existing bias sum.
+  Eigen::Matrix<double, 6, 1> expected_bias_info;
+  expected_bias_info.head<3>().setConstant(
+      1.0 / (config["gyroscope_random_walk"].as<double>() * 0.005 * std::sqrt(19.0)));
+  expected_bias_info.tail<3>().setConstant(
+      1.0 / (config["accelerometer_random_walk"].as<double>() * 0.005 * std::sqrt(19.0)));
+  if (windows != 10 || !manager.sqrt_info_.isApprox(expected_bias_info, 1e-10))
+    return false;
   std::cout << "prior=" << process_prior << " fine_solves=" << manager.opt_cnt << '\n';
   return manager.opt_cnt == 20;
 }
 
 int main(int argc, char **argv) {
   if (argc != 2) return 2;
-  return CheckWindows(argv[1], false) && CheckWindows(argv[1], true) ? 0 : 1;
+  const auto output = boost::filesystem::temp_directory_path() /
+                      boost::filesystem::unique_path("cocolic-window-%%%%-%%%%");
+  const bool passed = CheckWindows(argv[1], false, (output / "off").string()) &&
+                      CheckWindows(argv[1], true, (output / "rotation").string());
+  if (passed) boost::filesystem::remove_all(output);
+  else std::cerr << "Window diagnostics: " << output << '\n';
+  return passed ? 0 : 1;
 }
