@@ -144,6 +144,9 @@ target_link_libraries(odometry_node
 )
 
 if(CATKIN_ENABLE_TESTING)
+  add_executable(imu_factor_nurbs_test tests/test_imu_factor_nurbs.cpp)
+  target_link_libraries(imu_factor_nurbs_test ${thirdparty_libraries})
+  add_test(NAME imu_factor_nurbs_test COMMAND imu_factor_nurbs_test)
   add_executable(imu_noise_discretization_test tests/test_imu_noise_discretization.cpp)
   target_link_libraries(imu_noise_discretization_test ${thirdparty_libraries})
   add_test(NAME imu_noise_discretization_test COMMAND imu_noise_discretization_test)
