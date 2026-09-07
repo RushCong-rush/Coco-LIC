@@ -275,7 +275,24 @@ void Rgbmap_tracker::track_img(std::shared_ptr<Image_frame> &img_pose, double di
     }
 
     // m_lk_optical_flow_kernel->track_image( frame_gray, m_last_tracked_pts, m_current_tracked_pts, status, 2 );
-    cv::calcOpticalFlowPyrLK(last_img, frame_gray, m_last_tracked_pts, m_current_tracked_pts, status, err, cv::Size(21, 21), 3);
+    const bool erp = img_pose->m_camera_geometry &&
+                     img_pose->m_camera_geometry->isEquirectangular();
+    if (erp)
+    {
+        // Keep the horizontal seam inside the LK pyramids, not at their border.
+        const int width = last_img.cols;
+        const cv::Mat previous_periodic = cv::repeat(last_img, 1, 3);
+        const cv::Mat current_periodic = cv::repeat(frame_gray, 1, 3);
+        auto queries = m_last_tracked_pts;
+        for (auto &point : queries)
+            point.x += width;
+        cv::calcOpticalFlowPyrLK(previous_periodic, current_periodic, queries,
+            m_current_tracked_pts, status, err, cv::Size(21, 21), 3);
+        for (auto &point : m_current_tracked_pts)
+            point.x = img_pose->m_camera_geometry->wrapPixelU(point.x - width);
+    }
+    else
+        cv::calcOpticalFlowPyrLK(last_img, frame_gray, m_last_tracked_pts, m_current_tracked_pts, status, err, cv::Size(21, 21), 3);
     if (0)  //
     {
         std::vector<uchar> reverse_status;
@@ -310,8 +327,6 @@ void Rgbmap_tracker::track_img(std::shared_ptr<Image_frame> &img_pose, double di
 
     tim.tic("Reject_F");
     unsigned int pts_before_F = m_last_tracked_pts.size();
-    const bool erp = img_pose->m_camera_geometry &&
-                     img_pose->m_camera_geometry->isEquirectangular();
     if (!erp)
     {
         mat_F = cv::findFundamentalMat(m_last_tracked_pts, m_current_tracked_pts, cv::FM_RANSAC, 1.0, 0.997, status);
