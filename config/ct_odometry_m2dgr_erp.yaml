@@ -23,6 +23,10 @@ gyroscope_noise_density: 2.3417543020438883e-03
 gyroscope_random_walk: 1.4428407712885209e-05
 accelerometer_noise_density: 3.7686306102624571e-02
 accelerometer_random_walk: 1.1416642385952368e-03
+imu_noise_is_continuous: true
+imu_measurement_rate_hz: 150.0
+# Measurement energy multiplier, separate from the noise densities.
+imu_measurement_cost_scale: 150.0
 
 is_evo_viral: false
 

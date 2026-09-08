@@ -9,7 +9,7 @@ void Require(bool condition, const char* message) {
 }
 }
 
-int main() {
+int main(int argc, char **argv) {
   try {
     auto config = YAML::Load(R"(
 gyroscope_noise_density: 0.001
@@ -61,6 +61,37 @@ accelerometer_random_walk: 0.0003
     const cocolic::OptWeight faster(config);
     Require((faster.ContinuousBiasCovariance(.1) - whole).norm() == 0.,
             "Bias covariance must not depend on measurement rate");
+    for (double rate : {150., 200., 400.}) {
+      for (double multiplier : {.5, 1., 2.}) {
+        config["imu_measurement_rate_hz"] = rate;
+        config["imu_measurement_cost_scale"] = multiplier * rate;
+        const cocolic::OptWeight weights(config);
+        Require((weights.imu_info_vec - std::sqrt(multiplier) * legacy.imu_info_vec).norm() < 1e-10,
+                "Sampling-rate / measurement-energy scaling mismatch");
+        Require((weights.ContinuousBiasCovariance(.1) - whole).norm() == 0.,
+                "Measurement weighting changed continuous bias covariance");
+      }
+    }
+    Require(argc == 2, "Expected production config directory");
+    for (const char *profile : {"hilti_erp_exp04", "hilti_erp_stage3",
+         "hilti_erp_exp18", "hilti_erp_exp21", "hilti_lidar_only",
+         "m2dgr_erp", "m3dgr_dual_erp", "oxford_spires_erp"}) {
+      const auto node = YAML::LoadFile(std::string(argv[1]) + "/ct_odometry_" + profile + ".yaml");
+      Require(node["imu_noise_is_continuous"].as<bool>(), "Production profile uses legacy bias model");
+      Require(node["imu_measurement_rate_hz"] && node["imu_measurement_cost_scale"],
+              "Production profile omits IMU rate or measurement energy");
+      const cocolic::OptWeight weights(node);
+      const double rate = node["imu_measurement_rate_hz"].as<double>();
+      const double scale = node["imu_measurement_cost_scale"].as<double>();
+      Require(weights.imu_info_vec.allFinite() && weights.imu_info_vec.minCoeff() > 0.,
+              "Invalid production measurement information");
+      Require(std::abs(weights.imu_info_vec[0] * weights.imu_noise.sigma_w - std::sqrt(scale / rate)) < 1e-12,
+              "Production measurement whitening mismatch");
+      const auto covariance = weights.ContinuousBiasCovariance(.1);
+      Require(std::abs(covariance(0, 0) / weights.imu_noise.sigma_wb_2 - .1) < 1e-12 &&
+              std::abs(covariance(3, 3) / weights.imu_noise.sigma_ab_2 - .1) < 1e-12,
+              "Production bias covariance mismatch");
+    }
     config.remove("imu_measurement_rate_hz");
     bool rejected = false;
     try { cocolic::OptWeight missing_rate(config); }

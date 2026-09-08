@@ -149,7 +149,8 @@ if(CATKIN_ENABLE_TESTING)
   add_test(NAME imu_factor_nurbs_test COMMAND imu_factor_nurbs_test)
   add_executable(imu_noise_discretization_test tests/test_imu_noise_discretization.cpp)
   target_link_libraries(imu_noise_discretization_test ${thirdparty_libraries})
-  add_test(NAME imu_noise_discretization_test COMMAND imu_noise_discretization_test)
+  add_test(NAME imu_noise_discretization_test COMMAND imu_noise_discretization_test
+           ${CMAKE_CURRENT_SOURCE_DIR}/config)
   add_executable(empty_lidar_window_test
                  tests/test_empty_lidar_window.cpp
                  src/odom/trajectory_manager.cpp

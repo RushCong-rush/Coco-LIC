@@ -13,9 +13,11 @@ bool CheckWindows(const std::string &config_root, bool process_prior,
   trajectory->SetSensorExtrinsics(cocolic::LiDARSensor, cocolic::ExtrinsicParam());
   trajectory->SetSensorExtrinsics(cocolic::CameraSensor, cocolic::ExtrinsicParam());
   auto config = YAML::LoadFile(config_root + "/ct_odometry_hilti_erp_exp21.yaml");
+  config["imu_noise_is_continuous"] = continuous_noise;
   if (continuous_noise) {
-    config["imu_noise_is_continuous"] = true;
     config["imu_measurement_rate_hz"] = 200.;
+  } else {
+    config.remove("imu_measurement_rate_hz");
   }
   config["imu_measurement_cost_scale"] = measurement_cost_scale;
   cocolic::TrajectoryManager manager(config, config_root, trajectory);
