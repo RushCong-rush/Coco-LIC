@@ -8,7 +8,8 @@
 // IMU/camera windows, without introducing a test-only production interface.
 bool CheckWindows(const std::string &config_root, bool process_prior,
                   const std::string &diagnostic_dir, bool continuous_noise = false,
-                  double measurement_cost_scale = 1.) {
+                  double measurement_cost_scale = 1., bool gaussian_feedback = false,
+                  double image_cost_scale = 1., double process_cost_scale = 1.) {
   auto trajectory = std::make_shared<cocolic::Trajectory>(0.1);
   trajectory->SetSensorExtrinsics(cocolic::LiDARSensor, cocolic::ExtrinsicParam());
   trajectory->SetSensorExtrinsics(cocolic::CameraSensor, cocolic::ExtrinsicParam());
@@ -20,6 +21,8 @@ bool CheckWindows(const std::string &config_root, bool process_prior,
     config.remove("imu_measurement_rate_hz");
   }
   config["imu_measurement_cost_scale"] = measurement_cost_scale;
+  config["image_cost_scale"] = image_cost_scale;
+  config["robust_process_cost_scale"] = process_cost_scale;
   cocolic::TrajectoryManager manager(config, config_root, trajectory);
   manager.ConfigureControlPointDiagnostics(diagnostic_dir, "");
   auto camera = std::make_shared<cocolic::CameraGeometry>(
@@ -64,6 +67,17 @@ bool CheckWindows(const std::string &config_root, bool process_prior,
         pixels.push_back(pixel);
       }
     }
+    if (gaussian_feedback) {
+      points.clear();
+      pixels.clear();
+      if (window % 2 != 0) {
+        cocolic::PoseData feedback;
+        feedback.timestamp = window * 100000000LL + 50000000LL;
+        feedback.position.setZero();
+        feedback.orientation = Sophus::SO3d();
+        manager.SetGaussianFeedback(feedback);
+      }
+    }
     for (int iteration = 0; iteration < 2; ++iteration) {
       if (!manager.UpdateTrajectoryWithLIC(
               iteration, window * 100000000LL + 50000000LL,
@@ -96,6 +110,13 @@ bool CheckWindows(const std::string &config_root, bool process_prior,
       std::cerr << "Expected all 20 IMU samples in [start,end), got " << field << '\n';
       return false;
     }
+    if (gaussian_feedback) {
+      std::getline(row, field, ',');
+      if (std::stoi(field) != int(windows % 2 == 0)) {
+        std::cerr << "Feedback factor missing or reused in a later window\n";
+        return false;
+      }
+    }
     ++windows;
   }
   // Continuous noise integrates over bias-state time, not the 19 sample gaps.
@@ -113,6 +134,28 @@ bool CheckWindows(const std::string &config_root, bool process_prior,
 
 int main(int argc, char **argv) {
   if (argc != 2) return 2;
+  for (bool gp : {false, true}) {
+    const auto make_loss = [gp](double scale) {
+      return std::unique_ptr<ceres::LossFunction>(gp
+          ? cocolic::analytic_derivative::robust_wnoa::MakeCauchyLoss(scale)
+          : cocolic::analytic_derivative::MakePnPLoss(scale));
+    };
+    auto base = make_loss(1.);
+    for (double scale : {.25, .5, 1., 2., 4.}) {
+      auto weighted = make_loss(scale);
+      for (double squared_residual : {0., .01, 1., 100., 10000.}) {
+        double a[3], b[3];
+        base->Evaluate(squared_residual, a);
+        weighted->Evaluate(squared_residual, b);
+        for (int derivative = 0; derivative < 3; ++derivative)
+          if (std::abs(b[derivative] - scale * a[derivative]) >
+              1e-12 * (1. + std::abs(b[derivative]))) {
+            std::cerr << "Robust cost scaling changed loss shape\n";
+            return 1;
+          }
+      }
+    }
+  }
   const auto output = boost::filesystem::temp_directory_path() /
                       boost::filesystem::unique_path("cocolic-window-%%%%-%%%%");
   const bool passed = CheckWindows(argv[1], false, (output / "off").string()) &&
@@ -120,7 +163,11 @@ int main(int argc, char **argv) {
                       CheckWindows(argv[1], false, (output / "continuous_off").string(), true) &&
                       CheckWindows(argv[1], true, (output / "continuous_rotation").string(), true) &&
                       CheckWindows(argv[1], false, (output / "gain_off").string(), true, 200.) &&
-                      CheckWindows(argv[1], true, (output / "gain_rotation").string(), true, 200.);
+                      CheckWindows(argv[1], true, (output / "gain_rotation").string(), true, 200.) &&
+                      CheckWindows(argv[1], true, (output / "weighted_image").string(), true, 200., false, .5, 2.) &&
+                      CheckWindows(argv[1], true, (output / "weighted_process").string(), true, 200., false, 2., .5) &&
+                      CheckWindows(argv[1], false, (output / "feedback_off").string(), true, 200., true) &&
+                      CheckWindows(argv[1], true, (output / "feedback_rotation").string(), true, 200., true);
   if (passed) boost::filesystem::remove_all(output);
   else std::cerr << "Window diagnostics: " << output << '\n';
   return passed ? 0 : 1;

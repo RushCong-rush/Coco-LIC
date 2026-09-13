@@ -209,6 +209,17 @@ namespace cocolic
     // gaussian-lic
     if_3dgs_ = node["if_3dgs"].as<bool>();
     nh.param<bool>("if_3dgs", if_3dgs_, if_3dgs_);
+    gaussian_feedback_mode_ = node["gaussian_feedback_mode"]
+        ? node["gaussian_feedback_mode"].as<std::string>() : "off";
+    if (gaussian_feedback_mode_ != "off" && gaussian_feedback_mode_ != "sync" &&
+        gaussian_feedback_mode_ != "c2")
+      throw std::invalid_argument("gaussian_feedback_mode must be off, sync, or c2");
+    if (gaussian_feedback_mode_ != "off") {
+      if (!if_3dgs_) throw std::invalid_argument("Gaussian feedback requires mapping");
+      gaussian_feedback_client_ = nh.serviceClient<gaussian_lic::RefinePose>("/gaussian_lic/refine_pose");
+      if (!gaussian_feedback_client_.waitForExistence(ros::Duration(30)))
+        throw std::runtime_error("Gaussian feedback service unavailable");
+    }
     lidar_skip_ = node["lidar_skip"].as<int>();
     lidarpoints.clear();
 
@@ -415,6 +426,40 @@ namespace cocolic
     lidar_handler_->UpdateLidarSubMap();
 
     /// [4] update visual local map（tracking map points for the current image frame）
+    trajectory_manager_->ClearGaussianFeedback();
+    bool use_gaussian_feedback = false;
+    if (process_image && gaussian_feedback_mode_ != "off") {
+      gaussian_lic::RefinePose service;
+      auto Twc = trajectory_->GetCameraPoseNURBS(msg.image_timestamp);
+      const auto q = Twc.unit_quaternion();
+      auto& pose = service.request.initial_pose;
+      pose.position.x = Twc.translation().x(); pose.position.y = Twc.translation().y();
+      pose.position.z = Twc.translation().z();
+      pose.orientation.w = q.w(); pose.orientation.x = q.x();
+      pose.orientation.y = q.y(); pose.orientation.z = q.z();
+      cv_bridge::CvImage image;
+      image.header.stamp.fromNSec(msg.image_timestamp + trajectory_->GetDataStartTime());
+      image.encoding = "bgr8";
+      image.image = msg.image;
+      image.toImageMsg(service.request.image);
+      service.request.previous_frames = gaussian_published_frames_;
+      service.request.optimize = gaussian_feedback_mode_ == "c2";
+      if (!gaussian_feedback_client_.call(service))
+        throw std::runtime_error("Gaussian feedback request failed");
+      if (service.response.valid) {
+        const auto& p = service.response.pose;
+        SE3d refined(SO3d(Eigen::Quaterniond(p.orientation.w,p.orientation.x,p.orientation.y,p.orientation.z)),
+                     Eigen::Vector3d(p.position.x,p.position.y,p.position.z));
+        const auto& ep = trajectory_->GetSensorEP(CameraSensor);
+        const auto Twi = refined * SE3d(ep.so3, ep.p).inverse();
+        PoseData feedback;
+        feedback.timestamp = msg.image_timestamp;
+        feedback.orientation = Twi.so3();
+        feedback.position = Twi.translation();
+        trajectory_manager_->SetGaussianFeedback(feedback);
+        use_gaussian_feedback = true;
+      }
+    }
     // after upate, m_map_rgb_pts_in_last_frame_pos = m_map_rgb_pts_in_current_frame_pos
     v_points_.clear();
     px_obss_.clear();
@@ -468,7 +513,9 @@ namespace cocolic
       {
         trajectory_manager_->UpdateTrajectoryWithLIC(
             iter, msg.image_timestamp,
-            lidar_handler_->GetPointCorrespondence(), v_points_, px_obss_, 8,
+            lidar_handler_->GetPointCorrespondence(),
+            use_gaussian_feedback ? Eigen::aligned_vector<Eigen::Vector3d>() : v_points_,
+            use_gaussian_feedback ? Eigen::aligned_vector<Eigen::Vector2d>() : px_obss_, 8,
             iter == lidar_iter_ - 1);
       }
       else
@@ -999,6 +1046,7 @@ namespace cocolic
           new_colors.push_back(Eigen::Vector3i(red, green, blue));
         }
         odom_viewer_.Publish3DGSPoints(new_points, new_colors, time + trajectory_->GetDataStartTime());
+        ++gaussian_published_frames_;
       }
       else break;
     }

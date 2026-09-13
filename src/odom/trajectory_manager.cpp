@@ -321,8 +321,9 @@ namespace cocolic
   double TrajectoryManager::CurrentRobustProcessCostScale() const
   {
     if (!robust_process_risk_scaling_enabled_)
-      return 1.0;
-    return pending_camera_risk_.valid ? pending_camera_risk_.risk : 0.0;
+      return opt_weight_.robust_process_cost_scale;
+    return pending_camera_risk_.valid
+        ? opt_weight_.robust_process_cost_scale * pending_camera_risk_.risk : 0.0;
   }
 
   int TrajectoryManager::AddCurrentRobustProcessFactors(
@@ -1422,7 +1423,7 @@ namespace cocolic
             img_time_stamp,
             trajectory_->GetSensorEP(CameraSensor).so3,
             trajectory_->GetSensorEP(CameraSensor).p,
-            *camera_geometry_, opt_weight_.image_weight);
+            *camera_geometry_, opt_weight_.image_weight, opt_weight_.image_cost_scale);
         ++camera_factor_count;
       }
     }
@@ -1433,6 +1434,11 @@ namespace cocolic
 
     if (option.collect_camera_robust_risk)
       pending_camera_risk_ = estimator->ComputeCameraRobustRisk();
+
+    if (gaussian_feedback_valid_) {
+      estimator->AddPoseMeasurementAnalyticDiffNURBS(gaussian_feedback_pose_, 10.0, 100.0);
+      ++camera_factor_count;
+    }
 
     // The first-iteration camera risk is frozen for all refinements and the
     // marginalization prior produced from this window.
@@ -1762,13 +1768,34 @@ namespace cocolic
               trajectory_->GetSensorEP(CameraSensor).so3,
               trajectory_->GetSensorEP(CameraSensor).p,
               *camera_geometry_, opt_weight_.image_weight);
-          ceres::LossFunction *loss_function = NULL;
-          loss_function = new ceres::CauchyLoss(10.0); // adopted from vins-mono
+          ceres::LossFunction *loss_function =
+              analytic_derivative::MakePnPLoss(opt_weight_.image_cost_scale);
           ResidualBlockInfo *residual_block_info = new ResidualBlockInfo(RType_Image, cost_function, loss_function,
                                                                          vec, drop_set);
           marginalization_info->addResidualBlockInfo(residual_block_info);
         }
       }
+    }
+
+    if (gaussian_feedback_valid_) {
+      const int64_t time_ns = gaussian_feedback_pose_.timestamp;
+      std::pair<int, double> su;
+      trajectory_->GetIdxT(time_ns, su);
+      std::vector<double*> blocks;
+      estimator->AddControlPointsNURBS(su.first - 3, blocks);
+      estimator->AddControlPointsNURBS(su.first - 3, blocks, true);
+      std::vector<int> drop;
+      for (int i = 0; i < blocks.size(); ++i)
+        if (std::find(drop_param.begin(), drop_param.end(), blocks[i]) != drop_param.end())
+          drop.push_back(i);
+      Eigen::Matrix<double, 6, 1> weights;
+      weights << 100., 100., 100., 10., 10., 10.;
+      auto* factor = new analytic_derivative::IMUPoseFactorNURBS(time_ns,
+          gaussian_feedback_pose_, weights, trajectory_->knts, su,
+          trajectory_->blending_mats[su.first - 3], trajectory_->cumu_blending_mats[su.first - 3]);
+      marginalization_info->addResidualBlockInfo(
+          new ResidualBlockInfo(RType_Image, factor, nullptr, blocks, drop));
+      gaussian_feedback_valid_ = false;
     }
 
     marginalization_info->preMarginalize();

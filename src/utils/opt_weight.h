@@ -112,6 +112,8 @@ struct OptWeight {
 
   double lidar_weight;
   double image_weight;
+  double image_cost_scale = 1.0;
+  double robust_process_cost_scale = 1.0;
 
   OptWeight() {}
 
@@ -164,6 +166,12 @@ struct OptWeight {
     lidar_weight = yaml::GetValue<double>(node, "lidar_weight");
 
     image_weight = yaml::GetValue<double>(node, "image_weight");
+    image_cost_scale = yaml::GetValue<double>(node, "image_cost_scale", 1.0);
+    robust_process_cost_scale =
+        yaml::GetValue<double>(node, "robust_process_cost_scale", 1.0);
+    for (double scale : {image_cost_scale, robust_process_cost_scale})
+      if (!std::isfinite(scale) || scale <= 0.0)
+        throw std::invalid_argument("Image and process cost scales must be positive");
 
     print();
   }

@@ -329,7 +329,7 @@ namespace cocolic
                                         int64_t cur_img_timestamp,
                                         const SO3d &S_VtoI, const Eigen::Vector3d &p_VinI,
                                         const CameraGeometry &camera_geometry,
-                                        double img_weight);
+                                        double img_weight, double cost_scale = 1.0);
 
     void AddPhotometricMeasurementAutoDiffNURBS(const double &prev_pixel_intensity,
                                                 const Eigen::Vector3d &visual_map_point,

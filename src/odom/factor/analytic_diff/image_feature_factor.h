@@ -32,6 +32,12 @@ namespace cocolic
 {
   namespace analytic_derivative
   {
+    inline ceres::LossFunction* MakePnPLoss(double cost_scale = 1.0)
+    {
+      auto* loss = new ceres::CauchyLoss(10.0);
+      if (cost_scale == 1.0) return loss;
+      return new ceres::ScaledLoss(loss, cost_scale, ceres::TAKE_OWNERSHIP);
+    }
 
     class PnPFactorNURBS : public ceres::CostFunction,
                            So3SplineView,

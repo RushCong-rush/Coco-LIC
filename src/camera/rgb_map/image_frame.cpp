@@ -118,12 +118,7 @@ void Image_frame::init_cubic_interpolation()
     m_pose_w2c_R = m_pose_w2c_q.toRotationMatrix();
     m_img_rows = m_img.rows;
     m_img_cols = m_img.cols;
-#if (CV_MAJOR_VERSION >= 4)
-    cv::cvtColor(m_img, m_img_gray, cv::COLOR_RGB2GRAY);
-#else
-    // cv::cvtColor(m_img, m_img_gray, CV_RGB2GRAY);
-     cv::cvtColor(m_img, m_img_gray, CV_BGR2GRAY);
-#endif
+    cv::cvtColor(m_img, m_img_gray, cv::COLOR_BGR2GRAY);
 }
 
 void Image_frame::inverse_pose()

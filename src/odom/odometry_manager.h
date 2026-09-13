@@ -19,6 +19,7 @@
 #pragma once
 
 #include <ros/ros.h>
+#include <gaussian_lic/RefinePose.h>
 
 #include <odom/msg_manager.h>
 #include <odom/odometry_viewer.h>
@@ -211,6 +212,9 @@ namespace cocolic
     Eigen::Matrix3d K_;
 
     bool if_3dgs_;
+    std::string gaussian_feedback_mode_ = "off";
+    ros::ServiceClient gaussian_feedback_client_;
+    uint32_t gaussian_published_frames_ = 0;
     int lidar_skip_;
 
     std::queue<int64_t> time_buf;  // img timestamp

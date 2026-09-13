@@ -100,6 +100,14 @@ void Check(const std::vector<int64_t> &times, double u, bool moving, double weig
       measurement.timestamp, measurement, gravity, information, times, {3, u}, ordinary, cumulative);
   CheckJacobian(factor, parameters, true);
 
+  cocolic::PoseData pose;
+  pose.timestamp = measurement.timestamp;
+  pose.position = Eigen::Vector3d(.8, -.3, .2);
+  pose.orientation = SO3::exp(Eigen::Vector3d(-.15, .2, -.08));
+  cocolic::analytic_derivative::IMUPoseFactorNURBS pose_factor(
+      pose.timestamp, pose, information, times, {3, u}, ordinary, cumulative);
+  CheckJacobian(pose_factor, parameters, true);
+
   // Independent time finite differences check physical derivatives and gravity sign.
   const auto position = [&](double s) -> Eigen::Vector3d {
     const Eigen::Vector4d basis = ordinary * Eigen::Vector4d(1, s, s*s, s*s*s);

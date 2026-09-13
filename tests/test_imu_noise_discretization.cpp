@@ -18,6 +18,23 @@ gyroscope_random_walk: 0.00005
 accelerometer_random_walk: 0.0003
 )");
     const cocolic::OptWeight legacy(config);
+    Require(legacy.image_cost_scale == 1. && legacy.robust_process_cost_scale == 1.,
+            "Default camera or GP weight changed");
+    for (const char* key : {"image_cost_scale", "robust_process_cost_scale"}) {
+      for (const char* value : {"0", "-1", ".inf", ".nan"}) {
+        auto invalid_config = YAML::Clone(config);
+        invalid_config[key] = YAML::Load(value);
+        bool rejected = false;
+        try { cocolic::OptWeight bad(invalid_config); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        Require(rejected, "Invalid camera or GP cost scale accepted");
+      }
+      auto scaled_config = YAML::Clone(config);
+      scaled_config[key] = 2.;
+      const cocolic::OptWeight scaled(scaled_config);
+      Require((scaled.imu_info_vec - legacy.imu_info_vec).norm() == 0.,
+              "Camera or GP cost scale changed IMU information");
+    }
     Require(!legacy.imu_noise_is_continuous, "Legacy mode changed");
     Require(std::abs(legacy.imu_info_vec[0] - 1000.) < 1e-12,
             "Legacy measurement weight changed");

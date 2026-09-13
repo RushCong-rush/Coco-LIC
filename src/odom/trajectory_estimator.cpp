@@ -320,7 +320,7 @@ namespace cocolic
                                                            int64_t cur_img_timestamp,
                                                            const SO3d &S_VtoI, const Eigen::Vector3d &p_VinI,
                                                            const CameraGeometry &camera_geometry,
-                                                           double img_weight)
+                                                           double img_weight, double cost_scale)
   {
     int64_t time_ns = cur_img_timestamp;
     std::pair<int, double> su; // i u
@@ -340,8 +340,7 @@ namespace cocolic
     AddControlPointsNURBS(su.first - 3, vec);
     AddControlPointsNURBS(su.first - 3, vec, true);
 
-    ceres::LossFunction *loss_function = NULL;
-    loss_function = new ceres::CauchyLoss(kPnpCauchyLossScale); // adopt from vins-mono
+    ceres::LossFunction *loss_function = analytic_derivative::MakePnPLoss(cost_scale);
     ceres::ResidualBlockId residual_block =
         problem_->AddResidualBlock(cost_function, loss_function, vec);
     if (options.collect_observability_diagnostics)

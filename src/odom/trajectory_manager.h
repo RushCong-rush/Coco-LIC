@@ -265,6 +265,11 @@ namespace cocolic
     void SetDivision(int division) { division_ = division; }
 
     void SetProcessCurImg(bool flag) { process_cur_img_ = flag; }
+    void ClearGaussianFeedback() { gaussian_feedback_valid_ = false; }
+    void SetGaussianFeedback(const PoseData& pose) {
+      gaussian_feedback_pose_ = pose;
+      gaussian_feedback_valid_ = true;
+    }
 
     void SetIntrinsic(const Eigen::Matrix3d& K) { K_ = K; }
     void SetCameraGeometry(const std::shared_ptr<CameraGeometry> &camera_geometry)
@@ -361,6 +366,8 @@ namespace cocolic
                           const Eigen::Vector3d &p_aft, bool apply = true);
 
     PoseData original_pose_;
+    PoseData gaussian_feedback_pose_;
+    bool gaussian_feedback_valid_ = false;
 
     Eigen::aligned_vector<IMUData> imu_data_;
     Eigen::aligned_vector<PoseData> pose_data_;

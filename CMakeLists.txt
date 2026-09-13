@@ -28,6 +28,7 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
   image_transport
   livox_ros_driver
+  gaussian_lic
 )
 
 # FIND_PACKAGE(Boost REQUIRED COMPONENTS thread)
