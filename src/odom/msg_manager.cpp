@@ -20,6 +20,8 @@
 #include <utils/parameter_struct.h>
 
 #include <pcl/common/transforms.h>
+#include <cmath>
+#include <stdexcept>
 
 namespace cocolic
 {
@@ -123,6 +125,23 @@ namespace cocolic
         //           << T_Lk_to_L0 << std::endl;
       }
       T_LktoL0_vec_.push_back(T_Lk_to_L0);
+    }
+
+    // The combined runner forwards the single GS min_point_depth setting.
+    double min_point_depth = 0.0;
+    if (nh.getParam("min_point_depth", min_point_depth))
+    {
+      if (!std::isfinite(min_point_depth) || min_point_depth < 0.0)
+        throw std::invalid_argument("min_point_depth must be finite and nonnegative");
+      if (use_livox)
+      {
+        lidar_node["Livox"]["blind"] = min_point_depth;
+        lidar_node["Livox"]["use_radial_distance_filter"] = true;
+      }
+      if (use_vlp)
+        lidar_node["VLP16"]["min_distance"] = min_point_depth;
+      ROS_INFO_STREAM("Unified min_point_depth: " << min_point_depth
+                      << " m from each native LiDAR origin");
     }
 
     if (use_livox)
