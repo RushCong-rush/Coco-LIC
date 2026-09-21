@@ -144,6 +144,18 @@ namespace cocolic
                       << " m from each native LiDAR origin");
     }
 
+    std::string body_filter_config;
+    if (nh.getParam("body_filter_config", body_filter_config))
+    {
+      const auto body = YAML::LoadFile(body_filter_config)["body_filter"];
+      if (body)
+      {
+        if (num_lidars_ != 1 || !use_livox)
+          throw std::invalid_argument("Body cylinder requires one Livox LiDAR");
+        lidar_node["Livox"]["body_filter"] = body;
+      }
+    }
+
     if (use_livox)
       livox_feature_extraction_ =
           std::make_shared<LivoxFeatureExtraction>(lidar_node);

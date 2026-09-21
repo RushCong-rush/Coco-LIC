@@ -141,6 +141,17 @@ namespace cocolic
     int n_scan;
     double blind, inf_bound;
     bool use_radial_distance_filter;
+    double body_radius_ = 0.0, body_height_ = 0.0;
+    Eigen::Vector3d body_origin_ = Eigen::Vector3d::Zero();
+    Eigen::Vector3d body_axis_ = Eigen::Vector3d::Zero();
+    bool insideBody(const Eigen::Vector3d &point) const
+    {
+      if (body_radius_ <= 0.0) return false;
+      const Eigen::Vector3d relative = point - body_origin_;
+      const double axial = relative.dot(body_axis_);
+      return axial >= 0.0 && axial <= body_height_ &&
+             (relative - axial * body_axis_).squaredNorm() <= body_radius_ * body_radius_;
+    }
     int group_size;
     double disA, disB;
     double limit_maxmid, limit_midmin, limit_maxmin;

@@ -34,6 +34,18 @@ namespace cocolic
     use_radial_distance_filter = livox_node["use_radial_distance_filter"]
                                      ? livox_node["use_radial_distance_filter"].as<bool>()
                                      : false;
+    if (const auto body = livox_node["body_filter"])
+    {
+      body_radius_ = body["radius_m"].as<double>();
+      body_height_ = body["height_m"].as<double>();
+      for (int k = 0; k < 3; ++k)
+      {
+        body_origin_[k] = body["origin_lidar"][k].as<double>();
+        body_axis_[k] = body["axis_lidar"][k].as<double>();
+      }
+      ROS_INFO_STREAM("Body cylinder: radius=" << body_radius_ << " height=" << body_height_
+                      << " origin_L=" << body_origin_.transpose() << " axis_L=" << body_axis_.transpose());
+    }
     inf_bound = livox_node["inf_bound"].as<double>();
     group_size = livox_node["group_size"].as<int>();
     disA = livox_node["disA"].as<double>();
@@ -85,6 +97,9 @@ namespace cocolic
 
     for (uint i = 1; i < plsize; i++)
     {
+      if (insideBody(Eigen::Vector3d(lidar_msg->points[i].x,
+                                    lidar_msg->points[i].y, lidar_msg->points[i].z)))
+        continue;
       if ((lidar_msg->points[i].line < n_scan) &&
           ((lidar_msg->points[i].tag & 0x30) == 0x10) &&
           (!IS_VALID(lidar_msg->points[i].x)) &&
@@ -168,9 +183,16 @@ namespace cocolic
       in_cloud_vec[i] = RTPointCloud::Ptr(new RTPointCloud());
       in_cloud_vec[i]->reserve(plsize);
     }
+    size_t body_filtered = 0;
     // ANCHOR - remove nearing pts.
     for (uint i = 1; i < plsize; i++)
     {
+      if (insideBody(Eigen::Vector3d(lidar_msg->points[i].x,
+                                    lidar_msg->points[i].y, lidar_msg->points[i].z)))
+      {
+        ++body_filtered;
+        continue;
+      }
       const auto &point = lidar_msg->points[i];
       const double squared_range = point.x * point.x + point.y * point.y + point.z * point.z;
       const bool outside_blind = use_radial_distance_filter
@@ -204,6 +226,8 @@ namespace cocolic
         }
       }
     }
+    if (body_radius_ > 0.0)
+      ROS_INFO_STREAM_THROTTLE(5.0, "Body cylinder removed " << body_filtered << "/" << plsize << " raw points");
     if (in_cloud_vec.size() != n_scan)
     {
       return false;
@@ -263,6 +287,9 @@ namespace cocolic
     uint valid_num = 0;
     for (uint i = 1; i < plsize; i++)
     {
+      if (insideBody(Eigen::Vector3d(lidar_msg->points[i].x,
+                                    lidar_msg->points[i].y, lidar_msg->points[i].z)))
+        continue;
       if ((lidar_msg->points[i].line < n_scan) && ((lidar_msg->points[i].tag & 0x30) == 0x10 || (lidar_msg->points[i].tag & 0x30) == 0x00))
       {
         valid_num++;
