@@ -39,6 +39,7 @@ namespace cocolic
         image_topic_("")
   {
     OdometryMode odom_mode = OdometryMode(node["odometry_mode"].as<int>());
+    process_all_images_ = node["process_all_images"].as<bool>(false);
 
     nh.param<std::string>("bag_path", bag_path_, "");
     if (bag_path_ == "")
@@ -560,6 +561,8 @@ namespace cocolic
             image_buf_[i].timestamp < traj_max)
         {
           img_idx = i;
+          if (process_all_images_)
+            msgs.image_frames.emplace_back(image_buf_[i].timestamp, image_buf_[i].image);
         }
         if (image_buf_[i].timestamp >= traj_max)
         {
@@ -582,6 +585,8 @@ namespace cocolic
       if (img_idx != INT_MAX)
       {
         AddImageToMsg(msgs, image_buf_[img_idx], traj_max);
+        if (!process_all_images_)
+          msgs.image_frames.emplace_back(msgs.image_timestamp, msgs.image);
         // image_buf_.erase(image_buf_.begin() + img_idx);
       }
       else

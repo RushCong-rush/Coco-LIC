@@ -157,7 +157,8 @@ namespace cocolic
         const Eigen::aligned_vector<Eigen::Vector3d> &pnp_3ds,
         const Eigen::aligned_vector<Eigen::Vector2d> &pnp_2ds,
         const int iteration = 50,
-        bool final_lidar_iteration = true);
+        bool final_lidar_iteration = true,
+        const std::vector<int64_t>& pnp_timestamps = {});
 
     void ConfigureControlPointDiagnostics(
         const std::string &output_dir,
@@ -413,6 +414,7 @@ namespace cocolic
 
     Eigen::aligned_vector<Eigen::Vector3d> v_points_;
     Eigen::aligned_vector<Eigen::Vector2d> px_obss_;
+    std::vector<int64_t> visual_timestamps_;
 
     Eigen::Matrix3d K_;
     std::shared_ptr<CameraGeometry> camera_geometry_;
@@ -462,6 +464,7 @@ namespace cocolic
       process_cur_img_ = false;
       v_points_.clear();
       px_obss_.clear();
+      visual_timestamps_.clear();
     }  
   };
 

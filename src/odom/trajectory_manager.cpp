@@ -1275,7 +1275,8 @@ namespace cocolic
       const Eigen::aligned_vector<Eigen::Vector3d> &pnp_3ds,
       const Eigen::aligned_vector<Eigen::Vector2d> &pnp_2ds,
       const int iteration,
-      bool final_lidar_iteration)
+      bool final_lidar_iteration,
+      const std::vector<int64_t>& pnp_timestamps)
   {
     // Missing LiDAR matches must not skip current IMU/visual and prior state updates.
     if (imu_data_.empty() || imu_data_.size() == 1)
@@ -1410,17 +1411,20 @@ namespace cocolic
     /// [4] pnp factor
     v_points_.clear();
     px_obss_.clear();
+    visual_timestamps_.clear();
     if (pnp_3ds.size() != 0)
     {
       v_points_ = pnp_3ds;
       px_obss_ = pnp_2ds;
+      visual_timestamps_ = pnp_timestamps.empty()
+          ? std::vector<int64_t>(pnp_3ds.size(), img_time_stamp) : pnp_timestamps;
       process_cur_img_ = true;
       cur_img_time_ = img_time_stamp;
       for (int i = 0; i < pnp_3ds.size(); i++)
       {
         estimator->AddPnPMeasurementAnalyticNURBS(
             pnp_3ds[i], pnp_2ds[i],
-            img_time_stamp,
+            visual_timestamps_[i],
             trajectory_->GetSensorEP(CameraSensor).so3,
             trajectory_->GetSensorEP(CameraSensor).p,
             *camera_geometry_, opt_weight_.image_weight, opt_weight_.image_cost_scale);
@@ -1732,9 +1736,11 @@ namespace cocolic
     marginalization_info->addResidualBlockInfo(residual_block_info);
 
     /// [4] pnp factor marginalization
-    if (process_cur_img_ && v_points_.size() != 0)
+    for (size_t first = 0; process_cur_img_ && first < v_points_.size();)
     {
-      int64_t time_ns = cur_img_time_;
+      int64_t time_ns = visual_timestamps_[first];
+      size_t end = first + 1;
+      while (end < visual_timestamps_.size() && visual_timestamps_[end] == time_ns) ++end;
       std::pair<int, double> su; // i和u
       trajectory_->GetIdxT(time_ns, su);
       Eigen::Matrix4d blending_matrix = trajectory_->blending_mats[su.first - 3];
@@ -1759,7 +1765,7 @@ namespace cocolic
       if (!drop_set.empty())
       {
         Eigen::Matrix3d K;
-        for (int i = 0; i < v_points_.size(); i++)
+        for (size_t i = first; i < end; i++)
         {
           ceres::CostFunction *cost_function = new analytic_derivative::PnPFactorNURBS(
               time_ns, su,
@@ -1775,6 +1781,7 @@ namespace cocolic
           marginalization_info->addResidualBlockInfo(residual_block_info);
         }
       }
+      first = end;
     }
 
     if (gaussian_feedback_valid_) {

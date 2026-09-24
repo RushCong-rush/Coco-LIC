@@ -81,6 +81,7 @@ namespace cocolic
       lidar_raw_cloud->clear();
       lidar_surf_cloud->clear();
       lidar_corner_cloud->clear();
+      image_frames.clear();
 
       // image_feature_msgs.clear();
     }
@@ -117,6 +118,7 @@ namespace cocolic
     bool if_have_image;      // if has image in current time interval
     int64_t image_timestamp; // w.r.t. the start time of the trajectory
     cv::Mat image;           // raw image
+    std::vector<std::pair<int64_t, cv::Mat>> image_frames;
   };
 
   struct LiDARCloudData
@@ -315,6 +317,7 @@ namespace cocolic
     // int64_t cur_pose_timestamp_;
 
     bool use_image_;
+    bool process_all_images_ = false;
 
     bool lidar_timestamp_end_;
     bool remove_wrong_time_imu_;

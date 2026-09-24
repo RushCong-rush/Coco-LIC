@@ -211,6 +211,8 @@ namespace cocolic
     nh.param<bool>("if_3dgs", if_3dgs_, if_3dgs_);
     gaussian_feedback_mode_ = node["gaussian_feedback_mode"]
         ? node["gaussian_feedback_mode"].as<std::string>() : "off";
+    if (node["process_all_images"].as<bool>(false) && gaussian_feedback_mode_ != "off")
+      throw std::invalid_argument("Multi-image windows require gaussian_feedback_mode=off");
     if (gaussian_feedback_mode_ != "off" && gaussian_feedback_mode_ != "sync" &&
         gaussian_feedback_mode_ != "c2")
       throw std::invalid_argument("gaussian_feedback_mode must be off, sync, or c2");
@@ -463,44 +465,56 @@ namespace cocolic
     // after upate, m_map_rgb_pts_in_last_frame_pos = m_map_rgb_pts_in_current_frame_pos
     v_points_.clear();
     px_obss_.clear();
+    std::vector<int64_t> visual_timestamps;
     if (process_image)
     {
-      SE3d Twc = trajectory_->GetCameraPoseNURBS(msg.image_timestamp);
-      camera_handler_->UpdateVisualSubMap(msg.image, msg.image_timestamp * NS_TO_S, Twc.unit_quaternion(), Twc.translation());
-      // v_points_.clear();
-      // px_obss_.clear();
-      auto &map_rgb_pts_in_last_frame_pos = camera_handler_->op_track.m_map_rgb_pts_in_last_frame_pos;
-      for (auto it = map_rgb_pts_in_last_frame_pos.begin(); it != map_rgb_pts_in_last_frame_pos.end(); it++)
+      for (const auto& image_frame : msg.image_frames)
       {
-        RGB_pts *rgb_pt = ((RGB_pts *)it->first);
-        v_points_.push_back(Eigen::Vector3d(rgb_pt->get_pos()(0, 0), rgb_pt->get_pos()(1, 0), rgb_pt->get_pos()(2, 0)));
-        px_obss_.push_back(Eigen::Vector2d(it->second.x, it->second.y));
-      }
-
-      if (odom_viewer_.pub_track_img_.getNumSubscribers() != 0 || odom_viewer_.pub_sub_visual_map_.getNumSubscribers() != 0)
-      {
-        cv::Mat img_debug = camera_handler_->img_pose_->m_img.clone();
-        VPointCloud visual_sub_map_debug;  // optical flow + ransac *2 -> 3d association（red）
-        visual_sub_map_debug.clear();
-
+        const int64_t image_time = image_frame.first;
+        if (image_time <= t_begin_add_cam_) continue;
+        SE3d Twc = trajectory_->GetCameraPoseNURBS(image_time);
+        camera_handler_->UpdateVisualSubMap(image_frame.second, image_time * NS_TO_S, Twc.unit_quaternion(), Twc.translation());
+        // v_points_.clear();
+        // px_obss_.clear();
+        auto &map_rgb_pts_in_last_frame_pos = camera_handler_->op_track.m_map_rgb_pts_in_last_frame_pos;
         for (auto it = map_rgb_pts_in_last_frame_pos.begin(); it != map_rgb_pts_in_last_frame_pos.end(); it++)
         {
           RGB_pts *rgb_pt = ((RGB_pts *)it->first);
-          cv::circle(img_debug, it->second, 2, cv::Scalar(0, 255, 0), -1, 8);  // optical flow + ransac *2 -> 2d association（green）
-          VPoint temp_map;
-          temp_map.x = rgb_pt->get_pos()(0, 0);
-          temp_map.y = rgb_pt->get_pos()(1, 0);
-          temp_map.z = rgb_pt->get_pos()(2, 0);
-          temp_map.intensity = 0.;
-          visual_sub_map_debug.push_back(temp_map);
+          v_points_.push_back(Eigen::Vector3d(rgb_pt->get_pos()(0, 0), rgb_pt->get_pos()(1, 0), rgb_pt->get_pos()(2, 0)));
+          px_obss_.push_back(Eigen::Vector2d(it->second.x, it->second.y));
+          visual_timestamps.push_back(image_time);
         }
 
-        cv_bridge::CvImage out_msg;
-        out_msg.header.stamp = ros::Time::now();
-        out_msg.encoding = sensor_msgs::image_encodings::BGR8;
-        out_msg.image = img_debug;
-        odom_viewer_.PublishTrackImg(out_msg.toImageMsg());
-        odom_viewer_.PublishSubVisualMap(visual_sub_map_debug);
+        if (odom_viewer_.pub_track_img_.getNumSubscribers() != 0 || odom_viewer_.pub_sub_visual_map_.getNumSubscribers() != 0)
+        {
+          cv::Mat img_debug = camera_handler_->img_pose_->m_img.clone();
+          VPointCloud visual_sub_map_debug;  // optical flow + ransac *2 -> 3d association（red）
+          visual_sub_map_debug.clear();
+
+          for (auto it = map_rgb_pts_in_last_frame_pos.begin(); it != map_rgb_pts_in_last_frame_pos.end(); it++)
+          {
+            RGB_pts *rgb_pt = ((RGB_pts *)it->first);
+            cv::circle(img_debug, it->second, 2, cv::Scalar(0, 255, 0), -1, 8);  // optical flow + ransac *2 -> 2d association（green）
+            VPoint temp_map;
+            temp_map.x = rgb_pt->get_pos()(0, 0);
+            temp_map.y = rgb_pt->get_pos()(1, 0);
+            temp_map.z = rgb_pt->get_pos()(2, 0);
+            temp_map.intensity = 0.;
+            visual_sub_map_debug.push_back(temp_map);
+          }
+
+          cv_bridge::CvImage out_msg;
+          out_msg.header.stamp = ros::Time::now();
+          out_msg.encoding = sensor_msgs::image_encodings::BGR8;
+          out_msg.image = img_debug;
+          odom_viewer_.PublishTrackImg(out_msg.toImageMsg());
+          odom_viewer_.PublishSubVisualMap(visual_sub_map_debug);
+        }
+        // Replenish tracks before the next image; the last image uses the refined pose below.
+        if (image_time != msg.image_timestamp)
+          camera_handler_->AssociateNewPointsToCurrentImg(Twc.unit_quaternion(), Twc.translation());
+        std::cout << "[Visual input] timestamp_ns="
+                  << image_time + trajectory_->GetDataStartTime() << std::endl;
       }
     }
 
@@ -516,7 +530,7 @@ namespace cocolic
             lidar_handler_->GetPointCorrespondence(),
             use_gaussian_feedback ? Eigen::aligned_vector<Eigen::Vector3d>() : v_points_,
             use_gaussian_feedback ? Eigen::aligned_vector<Eigen::Vector2d>() : px_obss_, 8,
-            iter == lidar_iter_ - 1);
+            iter == lidar_iter_ - 1, visual_timestamps);
       }
       else
       {
@@ -904,9 +918,19 @@ namespace cocolic
 
   void OdometryManager::Publish3DGSMappingData(const NextMsgs& msg)
   {
-    time_buf.push(msg.image_timestamp);
-    lidar_buf.push(lidar_handler_->GetFeatureCurrent());
-    img_buf.push(msg.image);
+    auto feature = lidar_handler_->GetFeatureCurrent();
+    for (const auto& image_frame : msg.image_frames)
+    {
+      if (image_frame.first <= t_begin_add_cam_) continue;
+      time_buf.push(image_frame.first);
+      lidar_buf.push(feature);
+      img_buf.push(image_frame.second);
+      // Each LiDAR window is inserted once, regardless of the camera rate.
+      // Additional images reuse its projected depth, not duplicate 3D seed points.
+      feature.full_cloud->clear();
+      feature.surface_features->clear();
+      feature.corner_features->clear();
+    }
 
     while(!time_buf.empty())
     {
@@ -1047,6 +1071,8 @@ namespace cocolic
         }
         odom_viewer_.Publish3DGSPoints(new_points, new_colors, time + trajectory_->GetDataStartTime());
         ++gaussian_published_frames_;
+        std::cout << "[GS input] timestamp_ns=" << time + trajectory_->GetDataStartTime()
+                  << " source_points=" << cloud_undistort_ds->size() << std::endl;
       }
       else break;
     }
